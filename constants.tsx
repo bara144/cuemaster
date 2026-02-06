@@ -8,7 +8,7 @@ export const INITIAL_ADMIN: User = {
   permissions: ['all'],
   password: '1234',
   status: 'ACTIVE',
-  hallId: 'MAIN' // The first hall is assigned to the Super Admin
+  hallId: 'MAIN' 
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -23,6 +23,17 @@ export const DEFAULT_SETTINGS: AppSettings = {
   protectedPlayers: [],
   reportEmail: '',
   subscriptionWarningMsg: '',
-  // Initialized marketItems with an empty array to prevent undefined errors in MarketManagement
-  marketItems: []
+  marketItems: [],
+  discountTiers: {
+    4: 1000,
+    7: 2000,
+    9: 3000,
+    11: 4000,
+    15: 5000
+  },
+  tableGameDurations: {
+    1: { min: 8, max: 12 },
+    2: { min: 10, max: 15 },
+    3: { min: 10, max: 15 }
+  }
 };

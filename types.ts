@@ -6,6 +6,7 @@ export enum Role {
 }
 
 export type UserStatus = 'ACTIVE' | 'LOCKED';
+export type ItemStatus = 'AVAILABLE' | 'UNAVAILABLE' | 'COMING_SOON';
 
 export type Language = 'en' | 'ckb';
 export type Theme = 'light' | 'dark';
@@ -26,6 +27,7 @@ export type Notification = {
   text: string;
   timestamp: number;
   hallId: string;
+  isRead?: boolean; 
 };
 
 export type User = {
@@ -38,13 +40,41 @@ export type User = {
   status: UserStatus;
   subscriptionExpiresAt?: number;
   usageLimits?: UserUsageLimits;
-  systemMessage?: string; // Legacy field
+  systemMessage?: string; 
+  phoneNumber?: string; 
+  address?: string; 
+};
+
+export type MarketplaceItem = {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  status: ItemStatus;
+  imageUrls: string[]; 
+  timestamp: number;
+};
+
+export type MarketplaceOrder = {
+  id: string;
+  itemId: string;
+  itemName: string;
+  hallId: string;
+  managerName: string;
+  phoneNumber?: string; 
+  address?: string; 
+  notes: string;
+  timestamp: number;
+  status: 'PENDING' | 'COMPLETED';
+  quantity?: number; 
+  totalPrice?: number; 
 };
 
 export type AttendanceRecord = {
   id: string;
   userId: string;
   username: string;
+  hallId: string; 
   clockIn: number;
   clockOut: number | null;
   logouts: number[]; 
@@ -57,7 +87,6 @@ export type MarketOrder = {
   quantity: number;
 };
 
-// Added MarketItem type to define items available for sale in the market
 export type MarketItem = {
   id: string;
   name: string;
@@ -86,6 +115,7 @@ export type Transaction = {
   amount: number;
   discount: number;
   marketTotal: number;
+  expectedTotal: number; 
   totalPaid: number;
   paymentMethod: PaymentMethod;
   timestamp: number;
@@ -95,6 +125,7 @@ export type Transaction = {
   marketItems: MarketOrder[];
   isSettled?: boolean;
   note?: string;
+  isPartialSettlement?: boolean;
 };
 
 export type PrizeProbability = 'NEVER' | 'RARE' | 'NORMAL' | 'ENHANCED' | 'FREQUENT';
@@ -110,8 +141,8 @@ export type AppSettings = {
   tableCount: number;
   protectedPlayers: string[]; 
   reportEmail?: string;
-  // added subscriptionWarningMsg property to fix error on App.tsx:323
   subscriptionWarningMsg?: string;
-  // Added marketItems list to hold global market inventory definitions
   marketItems: MarketItem[];
+  discountTiers: Record<number, number>;
+  tableGameDurations: Record<number, { min: number; max: number }>;
 };
