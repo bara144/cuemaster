@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Trophy, X, Users, Shuffle, Medal, Timer, Plus, Banknote, CheckCircle, Circle, DollarSign, Archive, Trash2, ArrowDown, Lock, Info, ChevronRight, UserCheck, UserMinus, GitMerge, Layout, Hash, Zap } from 'lucide-react';
+import { Trophy, X, Users, Shuffle, Medal, Timer, Plus, Banknote, CheckCircle, Circle, DollarSign, Archive, Trash2, ArrowDown, Lock, Info, ChevronRight, UserCheck, UserMinus, GitMerge, Layout, Hash, Zap, UserPlus, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface Participant {
   id: string;
@@ -37,6 +37,8 @@ interface TournamentManagerProps {
   players: string[];
   tournamentData: TournamentData | null;
   setTournamentData: (data: TournamentData | null) => void;
+  setupParticipants: Participant[];
+  setSetupParticipants: (parts: Participant[]) => void;
   tournamentHistory: TournamentData[];
   setTournamentHistory: (history: TournamentData[]) => void;
   t: any;
@@ -47,19 +49,20 @@ interface TournamentManagerProps {
 }
 
 const TournamentManager: React.FC<TournamentManagerProps> = ({ 
-  players: existingPlayers, 
+  players: registeredPlayers = [], 
   tournamentData, 
-  setTournamentData, 
-  tournamentHistory,
+  setTournamentData,
+  setupParticipants = [],
+  setSetupParticipants,
+  tournamentHistory = [],
   setTournamentHistory,
   t, 
-  isRTL,
-  isDark,
+  isRTL, 
+  isDark, 
   isAdmin,
   settings
 }) => {
   const [newParticipantName, setNewParticipantName] = useState('');
-  const [localParticipants, setLocalParticipants] = useState<Participant[]>([]);
   const [winsNeeded, setWinsNeeded] = useState(2);
   const [entryFee, setEntryFee] = useState(0);
   const [showSummary, setShowSummary] = useState(false);
@@ -72,49 +75,41 @@ const TournamentManager: React.FC<TournamentManagerProps> = ({
   const [archiveProgress, setArchiveProgress] = useState(0);
   const archiveIntervalRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    if (tournamentData) {
-      setLocalParticipants(tournamentData.participants);
-      setWinsNeeded(tournamentData.winsNeeded || 2);
-      setEntryFee(tournamentData.entryFee || 0);
-    } else {
-      setLocalParticipants([]);
-    }
-  }, [tournamentData]);
+  // Safety checks for props
+  const safeSetupParts = Array.isArray(setupParticipants) ? setupParticipants : [];
+  const safeHistory = Array.isArray(tournamentHistory) ? tournamentHistory : [];
+  const safeRegPlayers = Array.isArray(registeredPlayers) ? registeredPlayers : [];
 
   const addParticipant = (name: string) => {
     const trimmed = name.trim();
     if (!trimmed) return;
-    if (localParticipants.some(p => p.name === trimmed)) return;
-    setLocalParticipants(prev => [...prev, { id: Math.random().toString(36).substr(2, 9), name: trimmed }]);
+    if (safeSetupParts.some(p => p && p.name === trimmed)) return;
+    setSetupParticipants([...safeSetupParts, { id: Math.random().toString(36).substr(2, 9), name: trimmed }]);
     setNewParticipantName('');
   };
 
-  const isProtected = (id: string | null) => {
-    if (!id) return false;
-    const p = localParticipants.find(part => part.id === id);
+  const isProtected = (id: string | null, parts: Participant[]) => {
+    if (!id || !Array.isArray(parts)) return false;
+    const p = parts.find(part => part && part.id === id);
     const protectedPlayerNames = settings?.protectedPlayers || [];
     return p && protectedPlayerNames.includes(p.name);
   };
 
   const totalExpectedRounds = useMemo(() => {
-    if (!tournamentData) return 0;
+    if (!tournamentData || !Array.isArray(tournamentData.participants) || tournamentData.participants.length < 2) return 0;
     return Math.ceil(Math.log2(tournamentData.participants.length));
   }, [tournamentData]);
 
-  const createRound = (playerIds: string[], roundNum: number, currentWinsNeeded: number, currentEntryFee: number, currentPaidIds: string[]): TournamentData => {
-    const shuffled = [...playerIds].sort(() => Math.random() - 0.5);
-    let protectedPool = shuffled.filter(id => isProtected(id));
-    let regularPool = shuffled.filter(id => !isProtected(id));
+  const createRound = (playerIds: string[], roundNum: number, currentWinsNeeded: number, currentEntryFee: number, currentPaidIds: string[], allParticipants: Participant[]): TournamentData => {
+    const shuffled = [...(playerIds || [])].sort(() => Math.random() - 0.5);
+    let protectedPool = shuffled.filter(id => isProtected(id, allParticipants));
+    let regularPool = shuffled.filter(id => !isProtected(id, allParticipants));
 
     let byePlayerId: string | null = null;
     const totalCount = protectedPool.length + regularPool.length;
     if (totalCount % 2 !== 0) {
-      if (protectedPool.length > 0) {
-        byePlayerId = protectedPool.pop() || null;
-      } else {
-        byePlayerId = regularPool.pop() || null;
-      }
+      if (protectedPool.length > 0) byePlayerId = protectedPool.pop() || null;
+      else byePlayerId = regularPool.pop() || null;
     }
 
     const matchPairs: { p1: string | null, p2: string | null }[] = [];
@@ -140,7 +135,7 @@ const TournamentManager: React.FC<TournamentManagerProps> = ({
 
     return {
       id: tournamentData?.id || Math.random().toString(36).substr(2, 9),
-      participants: tournamentData?.participants || localParticipants,
+      participants: allParticipants || [],
       currentRoundMatches: matches,
       roundHistory: tournamentData?.roundHistory || [],
       roundNumber: roundNum,
@@ -150,27 +145,33 @@ const TournamentManager: React.FC<TournamentManagerProps> = ({
       winnersPool: [],
       winsNeeded: currentWinsNeeded,
       entryFee: currentEntryFee,
-      paidParticipantIds: currentPaidIds,
+      paidParticipantIds: currentPaidIds || [],
       timestamp: tournamentData?.timestamp || Date.now()
     };
   };
 
   const startTournament = () => {
-    if (localParticipants.length < 2) return;
-    const initialIds = localParticipants.map(p => p.id);
-    setTournamentData(createRound(initialIds, 1, winsNeeded, entryFee, []));
+    if (safeSetupParts.length < 2) return;
+    const initialIds = safeSetupParts.map(p => p.id);
+    const newTournament = createRound(initialIds, 1, winsNeeded, entryFee, [], safeSetupParts);
+    setTournamentData(newTournament);
   };
 
   const proceedToNextRound = () => {
-    if (!tournamentData) return;
-    const pool = [...tournamentData.winnersPool];
+    if (!tournamentData || !Array.isArray(tournamentData.currentRoundMatches)) return;
+    
+    const winnersFromMatches = tournamentData.currentRoundMatches
+      .filter(m => m && m.winnerId !== null)
+      .map(m => m.winnerId as string);
+    
+    const pool = [...winnersFromMatches];
     if (tournamentData.byePlayerId) pool.push(tournamentData.byePlayerId);
     
     const currentRoundRecord = { 
       matches: tournamentData.currentRoundMatches, 
       byeId: tournamentData.byePlayerId 
     };
-    const newHistory = [...tournamentData.roundHistory, currentRoundRecord];
+    const newHistory = [...(tournamentData.roundHistory || []), currentRoundRecord];
 
     if (pool.length === 1) {
        setTournamentData({
@@ -179,8 +180,8 @@ const TournamentManager: React.FC<TournamentManagerProps> = ({
           status: 'FINISHED',
           winnerId: pool[0]
        });
-    } else {
-       const nextRound = createRound(pool, tournamentData.roundNumber + 1, tournamentData.winsNeeded, tournamentData.entryFee, tournamentData.paidParticipantIds);
+    } else if (pool.length > 1) {
+       const nextRound = createRound(pool, tournamentData.roundNumber + 1, tournamentData.winsNeeded, tournamentData.entryFee, tournamentData.paidParticipantIds, tournamentData.participants);
        setTournamentData({
          ...nextRound,
          roundHistory: newHistory
@@ -189,11 +190,11 @@ const TournamentManager: React.FC<TournamentManagerProps> = ({
   };
 
   const updateWin = (matchId: string, playerNum: 1 | 2, delta: number) => {
-    if (!tournamentData) return;
+    if (!tournamentData || !Array.isArray(tournamentData.currentRoundMatches)) return;
     const targetWins = tournamentData.winsNeeded || 2;
 
     const newMatches = tournamentData.currentRoundMatches.map(m => {
-      if (m.id === matchId) {
+      if (m && m.id === matchId) {
         const updated = { ...m };
         if (playerNum === 1) updated.p1Wins = Math.max(0, updated.p1Wins + delta);
         else updated.p2Wins = Math.max(0, updated.p2Wins + delta);
@@ -207,23 +208,19 @@ const TournamentManager: React.FC<TournamentManagerProps> = ({
       return m;
     });
 
-    const currentWinners = newMatches
-      .filter(m => m.winnerId !== null)
-      .map(m => m.winnerId as string);
-
     setTournamentData({
       ...tournamentData,
-      currentRoundMatches: newMatches,
-      winnersPool: currentWinners
+      currentRoundMatches: newMatches
     });
   };
 
   const togglePayment = (playerId: string) => {
     if (!tournamentData) return;
-    const isPaid = tournamentData.paidParticipantIds.includes(playerId);
+    const currentPaidIds = Array.isArray(tournamentData.paidParticipantIds) ? tournamentData.paidParticipantIds : [];
+    const isPaid = currentPaidIds.includes(playerId);
     const newPaidIds = isPaid 
-      ? tournamentData.paidParticipantIds.filter(id => id !== playerId)
-      : [...tournamentData.paidParticipantIds, playerId];
+      ? currentPaidIds.filter(id => id !== playerId)
+      : [...currentPaidIds, playerId];
     
     setTournamentData({
       ...tournamentData,
@@ -233,20 +230,20 @@ const TournamentManager: React.FC<TournamentManagerProps> = ({
 
   const archiveTournamentAction = () => {
     if (!tournamentData) return;
-    setTournamentHistory([tournamentData, ...tournamentHistory]);
+    setTournamentHistory([tournamentData, ...safeHistory]);
     setTournamentData(null);
+    setSetupParticipants([]);
   };
 
   const startCancelPress = () => {
     setIsPressingCancel(true);
     setCancelProgress(0);
     const startTime = Date.now();
-    const duration = 1000;
     cancelIntervalRef.current = window.setInterval(() => {
       const elapsed = Date.now() - startTime;
-      const progress = Math.min((elapsed / duration) * 100, 100);
+      const progress = Math.min((elapsed / 1000) * 100, 100);
       setCancelProgress(progress);
-      if (elapsed >= duration) {
+      if (elapsed >= 1000) {
         stopCancelPress();
         setTournamentData(null);
       }
@@ -263,14 +260,13 @@ const TournamentManager: React.FC<TournamentManagerProps> = ({
     setPressingArchiveId(id);
     setArchiveProgress(0);
     const startTime = Date.now();
-    const duration = 2000; 
     archiveIntervalRef.current = window.setInterval(() => {
       const elapsed = Date.now() - startTime;
-      const progress = Math.min((elapsed / duration) * 100, 100);
+      const progress = Math.min((elapsed / 2000) * 100, 100);
       setArchiveProgress(progress);
-      if (elapsed >= duration) {
+      if (elapsed >= 2000) {
         stopDeleteArchivePress();
-        setTournamentHistory(tournamentHistory.filter(tHist => tHist.id !== id));
+        setTournamentHistory(safeHistory.filter(tHist => tHist && tHist.id !== id));
       }
     }, 20);
   };
@@ -281,119 +277,13 @@ const TournamentManager: React.FC<TournamentManagerProps> = ({
     setArchiveProgress(0);
   };
 
-  const getPlayerName = (id: string | null, participants: Participant[] = localParticipants) => {
-    if (!id) return "---";
-    const p = participants.find(part => part.id === id);
+  const getPlayerName = (id: string | null, participants: Participant[] = []) => {
+    if (!id || !Array.isArray(participants)) return "---";
+    const p = participants.find(part => part && part.id === id);
     return p ? p.name : "Unknown";
   };
 
   const formatCurrency = (val: number) => val.toLocaleString() + " IQD";
-
-  const renderBracketMap = () => {
-    if (!tournamentData) return null;
-    
-    const displayRounds: { matches: Match[], byeId: string | null, isFuture?: boolean }[] = [];
-    const totalRounds = totalExpectedRounds;
-    
-    tournamentData.roundHistory.forEach(record => displayRounds.push(record));
-    displayRounds.push({ 
-      matches: tournamentData.currentRoundMatches, 
-      byeId: tournamentData.byePlayerId 
-    });
-
-    for (let r = displayRounds.length + 1; r <= totalRounds; r++) {
-      const lastRoundItem = displayRounds[displayRounds.length - 1];
-      const prevTotalParticipating = (lastRoundItem.matches.length * 2) + (lastRoundItem.byeId ? 1 : 0);
-      const nextTotal = Math.ceil(prevTotalParticipating / 2);
-      const futureMatchesCount = Math.floor(nextTotal / 2);
-      const futureBye = nextTotal % 2 !== 0;
-
-      displayRounds.push({
-        matches: Array.from({ length: futureMatchesCount }).map((_, idx) => ({
-          id: `f-r${r}-m${idx}`, p1Id: null, p2Id: null, winnerId: null, round: r, p1Wins: 0, p2Wins: 0
-        })),
-        byeId: futureBye ? "future-bye" : null,
-        isFuture: true
-      });
-    }
-
-    return (
-      <div className={`relative flex w-full gap-2 items-stretch h-full ${isRTL ? 'flex-row-reverse' : ''}`} dir="ltr">
-        {displayRounds.map((roundRecord, rIdx) => (
-          <div key={rIdx} className="flex-1 flex flex-col gap-4 min-w-0 relative py-2">
-            <div className="text-center shrink-0 z-20">
-              <span className="px-2 py-1 bg-indigo-600/20 text-indigo-400 rounded-lg text-[8px] font-black uppercase tracking-widest border border-indigo-500/10">
-                {t.round} {rIdx + 1}
-              </span>
-            </div>
-            
-            <div className="flex-1 flex flex-col justify-around gap-2 py-4 relative z-10">
-              {roundRecord.matches.map((match: Match) => {
-                const isFinished = !!match.winnerId;
-                const p1Lost = isFinished && match.winnerId !== match.p1Id;
-                const p2Lost = isFinished && match.winnerId !== match.p2Id;
-
-                return (
-                  <div key={match.id} className="relative w-full">
-                    <div className={`w-full rounded-xl border overflow-hidden transition-all duration-300 relative ${roundRecord.isFuture ? 'bg-slate-900/40 border-dashed border-slate-700 opacity-40' : (isFinished ? 'bg-slate-800 border-emerald-500/30 shadow-inner' : 'bg-slate-800 border-indigo-500/30 shadow-lg shadow-indigo-500/5')}`}>
-                      {/* Player 1 Row */}
-                      <div className={`px-2 py-2 flex justify-between items-center border-b border-slate-700/50 transition-colors ${p1Lost ? 'bg-rose-500/20 text-rose-400' : (match.winnerId === match.p1Id ? 'bg-emerald-500/10 text-emerald-400' : 'text-slate-300')}`}>
-                         <span className="text-[10px] font-black truncate flex-1">
-                           {getPlayerName(match.p1Id, tournamentData.participants)}
-                         </span>
-                         {match.winnerId === match.p1Id && <CheckCircle size={10} className="text-emerald-500" />}
-                      </div>
-                      {/* Player 2 Row */}
-                      <div className={`px-2 py-2 flex justify-between items-center transition-colors ${p2Lost ? 'bg-rose-500/20 text-rose-400' : (match.winnerId === match.p2Id ? 'bg-emerald-500/10 text-emerald-400' : 'text-slate-300')}`}>
-                         <span className="text-[10px] font-black truncate flex-1">
-                           {getPlayerName(match.p2Id, tournamentData.participants)}
-                         </span>
-                         {match.winnerId === match.p2Id && <CheckCircle size={10} className="text-emerald-500" />}
-                      </div>
-                    </div>
-                    {/* SVG Connector Line (Curvy) */}
-                    {rIdx < displayRounds.length - 1 && !roundRecord.isFuture && (
-                      <svg className="absolute top-1/2 left-full w-8 h-32 -translate-y-1/2 pointer-events-none z-0 overflow-visible" style={{ left: 'calc(100% - 2px)' }}>
-                        <path 
-                          d="M 0 64 C 16 64, 16 64, 32 64" 
-                          fill="none" 
-                          stroke="currentColor" 
-                          strokeWidth="2" 
-                          className="text-indigo-500/30"
-                        />
-                      </svg>
-                    )}
-                  </div>
-                );
-              })}
-
-              {roundRecord.byeId && (
-                <div className="relative w-full">
-                  <div className={`p-2 rounded-xl border flex flex-col items-center justify-center gap-1 transition-all ${roundRecord.isFuture ? 'bg-indigo-500/5 border-dashed border-slate-700 opacity-30' : 'bg-indigo-500/10 border-indigo-500/20 shadow-lg'}`}>
-                    <span className="text-[9px] font-black text-white truncate w-full text-center">
-                      {roundRecord.byeId === "future-bye" ? t.waiting : getPlayerName(roundRecord.byeId, tournamentData.participants)}
-                    </span>
-                    <div className="px-2 py-0.5 bg-indigo-500/20 rounded text-[7px] font-black text-indigo-400 uppercase tracking-tighter">BYE</div>
-                  </div>
-                   {rIdx < displayRounds.length - 1 && !roundRecord.isFuture && (
-                      <svg className="absolute top-1/2 left-full w-8 h-32 -translate-y-1/2 pointer-events-none z-0 overflow-visible" style={{ left: 'calc(100% - 2px)' }}>
-                        <path 
-                          d="M 0 64 C 16 64, 16 64, 32 64" 
-                          fill="none" 
-                          stroke="currentColor" 
-                          strokeWidth="2" 
-                          className="text-indigo-500/30"
-                        />
-                      </svg>
-                    )}
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-    );
-  };
 
   const renderSetup = () => (
     <div className="max-w-xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300 pb-20">
@@ -401,7 +291,7 @@ const TournamentManager: React.FC<TournamentManagerProps> = ({
         <div className={`absolute top-0 ${isRTL ? 'left-0' : 'right-0'} p-4`}>
            <div className="px-4 py-2 bg-indigo-600 rounded-2xl flex items-center gap-2 shadow-lg border border-white/10">
               <Users size={18} className="text-white" />
-              <span className="text-lg font-black text-white">{localParticipants.length}</span>
+              <span className="text-lg font-black text-white">{safeSetupParts.length}</span>
            </div>
         </div>
 
@@ -454,6 +344,7 @@ const TournamentManager: React.FC<TournamentManagerProps> = ({
                type="text" 
                value={newParticipantName}
                onChange={(e) => setNewParticipantName(e.target.value)}
+               onKeyPress={(e) => e.key === 'Enter' && addParticipant(newParticipantName)}
                placeholder={t.playerName}
                className={`flex-1 border rounded-2xl px-6 py-4 focus:outline-none focus:border-emerald-500 font-bold text-base ${isDark ? 'bg-slate-900 border-slate-700 text-white' : 'bg-slate-50 border-slate-200 text-slate-900'} ${isRTL ? 'text-right' : ''}`}
              />
@@ -463,24 +354,43 @@ const TournamentManager: React.FC<TournamentManagerProps> = ({
           </div>
 
           <div className={`border-t pt-6 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}>
+             <p className={`text-[9px] font-black text-slate-500 uppercase mb-4 ${isRTL ? 'text-right' : ''}`}>Selection Pool</p>
              <div className="grid grid-cols-1 gap-2.5 max-h-48 overflow-y-auto px-1 custom-scrollbar">
-                {localParticipants.map(p => (
+                {safeSetupParts.map(p => p && (
                   <div key={p.id} className={`flex items-center justify-between px-4 py-3 rounded-2xl border transition-all ${isDark ? 'bg-slate-900/50 border-slate-700 text-white' : 'bg-slate-50 border-slate-100 text-slate-900'} ${isRTL ? 'flex-row-reverse' : ''}`}>
                     <div className="flex items-center gap-3 truncate">
                        <span className="w-6 h-6 rounded-lg bg-indigo-500/20 text-indigo-400 text-[10px] font-black flex items-center justify-center shrink-0">#</span>
                        <span className="text-sm font-bold truncate">{p.name}</span>
                     </div>
-                    <button onClick={() => setLocalParticipants(prev => prev.filter(lp => lp.id !== p.id))} className="text-slate-500 hover:text-rose-500 p-2"><X size={16} /></button>
+                    <button onClick={() => setSetupParticipants(safeSetupParts.filter(lp => lp && lp.id !== p.id))} className="text-slate-500 hover:text-rose-500 p-2"><X size={16} /></button>
                   </div>
+                ))}
+                {safeSetupParts.length === 0 && (
+                  <div className="py-8 text-center text-slate-500 italic text-xs">{t.noParticipants}</div>
+                )}
+             </div>
+          </div>
+
+          <div className={`border-t pt-6 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}>
+             <p className={`text-[9px] font-black text-slate-500 uppercase mb-4 ${isRTL ? 'text-right' : ''}`}>Quick Add Registered Players</p>
+             <div className="flex flex-wrap gap-2">
+                {safeRegPlayers.filter(rp => rp && !safeSetupParts.some(sp => sp && sp.name === rp)).slice(0, 15).map(rp => (
+                  <button 
+                    key={rp} 
+                    onClick={() => addParticipant(rp)}
+                    className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-[10px] font-bold text-slate-400 hover:text-emerald-400 hover:border-emerald-500 transition-all flex items-center gap-1.5"
+                  >
+                    <UserPlus size={10} /> {rp}
+                  </button>
                 ))}
              </div>
           </div>
 
           <button 
-            disabled={localParticipants.length < 2}
+            disabled={safeSetupParts.length < 2}
             onClick={startTournament}
             className={`w-full py-5 rounded-2xl font-black text-lg transition-all flex items-center justify-center gap-3 shadow-2xl active:scale-95 ${
-              localParticipants.length < 2 ? 'bg-slate-700 cursor-not-allowed text-slate-500' : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-600/30'
+              safeSetupParts.length < 2 ? 'bg-slate-700 cursor-not-allowed text-slate-500' : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-600/30'
             }`}
           >
             <Shuffle size={24} /> {t.startTournament}
@@ -488,67 +398,54 @@ const TournamentManager: React.FC<TournamentManagerProps> = ({
         </div>
       </div>
 
-      {tournamentHistory.length > 0 && (
-        <div className="space-y-6">
-           <h4 className={`text-sm font-black text-slate-500 uppercase tracking-[0.4em] flex items-center gap-3 px-6 ${isRTL ? 'flex-row-reverse' : ''}`}>
-             <Archive size={18} /> {t.tournamentArchive}
-           </h4>
-           <div className="grid grid-cols-1 gap-6">
-              {tournamentHistory.map(archive => {
-                const champ = archive.participants.find(p => p.id === archive.winnerId);
-                const isDeleting = pressingArchiveId === archive.id;
-                const archiveRevenue = archive.paidParticipantIds.length * archive.entryFee;
-                
-                return (
-                  <div key={archive.id} className={`p-6 rounded-[2.5rem] border relative overflow-hidden transition-all hover:scale-[1.01] ${isDark ? 'bg-slate-800/60 border-slate-700' : 'bg-white border-slate-200 shadow-md'}`}>
-                    <div className={`flex justify-between items-start mb-4 ${isRTL ? 'flex-row-reverse' : ''}`}>
-                       <div className={isRTL ? 'text-right' : ''}>
-                          <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-1.5 flex items-center gap-2">
-                             <Hash size={10} /> {archive.participants.length} Players
-                          </p>
-                          <h5 className="text-xl font-black text-white leading-tight">{champ?.name || '---'}</h5>
-                          <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">{t.champion}</span>
-                       </div>
-                       
-                       <button 
-                         onMouseDown={() => startDeleteArchivePress(archive.id)}
-                         onMouseUp={stopDeleteArchivePress}
-                         onMouseLeave={stopDeleteArchivePress}
-                         onTouchStart={() => startDeleteArchivePress(archive.id)}
-                         onTouchEnd={stopDeleteArchivePress}
-                         className="relative w-12 h-12 rounded-2xl bg-rose-500/10 text-rose-500 border border-rose-500/20 flex items-center justify-center transition-all overflow-hidden active:scale-95"
-                       >
-                         {isDeleting && (
-                           <div className="absolute bottom-0 left-0 h-full bg-rose-500/40 transition-all ease-linear" style={{ width: `${archiveProgress}%` }} />
-                         )}
-                         <Trash2 size={22} className="relative z-10" />
-                       </button>
-                    </div>
-
-                    {isAdmin && (
-                      <div className={`mt-6 pt-6 border-t border-slate-700/50 flex justify-between items-center ${isRTL ? 'flex-row-reverse' : ''}`}>
-                        <div className="flex flex-col">
-                           <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{t.totalCollected}</span>
-                           <span className="text-lg font-black text-emerald-400">{formatCurrency(archiveRevenue)}</span>
-                        </div>
-                        <div className="text-[10px] text-slate-600 font-bold italic">
-                           {new Date(archive.timestamp).toLocaleDateString()}
-                        </div>
-                      </div>
-                    )}
+      <div className="space-y-6">
+        <h4 className={`text-sm font-black text-slate-500 uppercase tracking-[0.4em] flex items-center gap-3 ${isRTL ? 'flex-row-reverse' : ''}`}>
+           <Archive size={18} /> {t.tournamentArchive}
+        </h4>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+           {safeHistory.map((hist, idx) => {
+             if (!hist) return null;
+             const champion = (hist.participants || []).find(p => p && p.id === hist.winnerId);
+             const isDeleting = pressingArchiveId === hist.id;
+             return (
+               <div key={hist.id} className={`p-6 rounded-[2rem] border relative overflow-hidden transition-all ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200 shadow-lg'}`}>
+                  <div className={`flex justify-between items-start mb-4 ${isRTL ? 'flex-row-reverse' : ''}`}>
+                     <div className={isRTL ? 'text-right' : ''}>
+                        <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">{t.champion}</p>
+                        <h5 className="text-xl font-black text-white">{champion?.name || '---'}</h5>
+                        <p className="text-[9px] text-slate-500 font-bold uppercase mt-1">{new Date(hist.timestamp).toLocaleDateString()}</p>
+                     </div>
+                     <button 
+                        onMouseDown={() => startDeleteArchivePress(hist.id)} onMouseUp={stopDeleteArchivePress} onMouseLeave={stopDeleteArchivePress}
+                        className="relative p-3 bg-rose-500/10 text-rose-500 rounded-xl hover:bg-rose-500 hover:text-white transition-all overflow-hidden"
+                     >
+                        {isDeleting && <div className="absolute bottom-0 left-0 h-full bg-rose-500/40 transition-all ease-linear" style={{ width: `${archiveProgress}%` }} />}
+                        <Trash2 size={18} className="relative z-10" />
+                     </button>
                   </div>
-                );
-              })}
-           </div>
+                  <div className={`flex items-center gap-4 text-[10px] font-black text-slate-500 uppercase tracking-tighter ${isRTL ? 'flex-row-reverse' : ''}`}>
+                     <div className="flex items-center gap-1.5"><Users size={12} /> {(hist.participants || []).length} Players</div>
+                     <div className="w-1 h-1 bg-slate-700 rounded-full"></div>
+                     <div className="flex items-center gap-1.5"><Zap size={12} /> {hist.roundNumber} Rounds</div>
+                  </div>
+               </div>
+             );
+           })}
+           {safeHistory.length === 0 && (
+             <div className="col-span-full py-12 text-center text-slate-600 border-2 border-dashed border-slate-800 rounded-[2rem] font-bold italic opacity-30">
+                {t.noArchivedTournaments}
+             </div>
+           )}
         </div>
-      )}
+      </div>
     </div>
   );
 
   const renderActive = () => {
-    if (!tournamentData) return null;
-    const totalCollected = tournamentData.paidParticipantIds.length * tournamentData.entryFee;
-    const matchesFinished = tournamentData.currentRoundMatches.every(m => m.winnerId !== null);
+    if (!tournamentData || !Array.isArray(tournamentData.currentRoundMatches)) return null;
+    const paidIds = Array.isArray(tournamentData.paidParticipantIds) ? tournamentData.paidParticipantIds : [];
+    const totalCollected = paidIds.length * (tournamentData.entryFee || 0);
+    const matchesFinished = tournamentData.currentRoundMatches.every(m => m && m.winnerId !== null);
 
     return (
       <div className="max-w-5xl mx-auto space-y-8 animate-in fade-in duration-300 pb-20">
@@ -561,7 +458,7 @@ const TournamentManager: React.FC<TournamentManagerProps> = ({
                        {t.round} {tournamentData.roundNumber} / {totalExpectedRounds}
                      </span>
                      <div className="flex items-center gap-1.5 text-indigo-400 font-black text-[10px] uppercase tracking-widest">
-                        <Users size={12} /> {tournamentData.participants.length} Players
+                        <Users size={12} /> {(tournamentData.participants || []).length} Players
                      </div>
                   </div>
                   <h3 className="text-2xl font-black text-white">{t.tournamentActive}</h3>
@@ -590,6 +487,7 @@ const TournamentManager: React.FC<TournamentManagerProps> = ({
 
             <div className="flex flex-col items-center gap-6">
               {tournamentData.currentRoundMatches.map((match) => {
+                if (!match) return null;
                 const isP1Winner = match.winnerId === match.p1Id;
                 const isP2Winner = match.winnerId === match.p2Id;
                 const isFinished = !!match.winnerId;
@@ -669,17 +567,18 @@ const TournamentManager: React.FC<TournamentManagerProps> = ({
                     <h4 className="text-base font-black uppercase tracking-widest text-white">{t.playersDirectory}</h4>
                  </div>
                  <span className="bg-slate-900 px-3 py-1 rounded-full text-xs font-black text-slate-500 border border-slate-700">
-                   {tournamentData.participants.length}
+                   {(tournamentData.participants || []).length}
                  </span>
               </div>
               <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
-                {tournamentData.participants.map(p => {
-                  const isPaid = tournamentData.paidParticipantIds.includes(p.id);
+                {(tournamentData.participants || []).map(p => {
+                  if (!p) return null;
+                  const isPaid = paidIds.includes(p.id);
                   return (
                     <div key={p.id} className={`flex items-center justify-between p-5 rounded-2xl border transition-all ${isPaid ? (isDark ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-emerald-50 border-emerald-200 shadow-sm') : (isDark ? 'bg-slate-900/50 border-slate-700 opacity-60' : 'bg-slate-50 border-slate-100')} ${isRTL ? 'flex-row-reverse text-right' : ''}`}>
                       <div className={`flex items-center gap-3 flex-1 min-w-0 ${isRTL ? 'flex-row-reverse' : ''}`}>
                         <div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-xs ${isPaid ? 'bg-emerald-500 text-white' : 'bg-slate-700 text-slate-500'}`}>
-                          {p.name[0]}
+                          {p.name ? p.name[0] : '?'}
                         </div>
                         <span className={`text-sm font-bold truncate flex-1 ${isPaid ? 'text-emerald-400' : 'text-slate-400'}`}>{p.name}</span>
                       </div>
@@ -692,76 +591,88 @@ const TournamentManager: React.FC<TournamentManagerProps> = ({
               </div>
             </div>
 
-            {isAdmin && (
-              <div className="p-8 rounded-[3rem] border shadow-2xl bg-gradient-to-br from-indigo-900/40 via-slate-800 to-indigo-950 border-indigo-500/30 relative overflow-hidden group">
-                <div className="absolute -bottom-10 -left-10 w-40 h-40 bg-emerald-500/10 rounded-full blur-3xl transition-all group-hover:scale-150"></div>
-                <div className={`flex items-center gap-4 mb-8 relative z-10 ${isRTL ? 'flex-row-reverse' : ''}`}>
-                   <DollarSign size={24} className="text-emerald-400" />
-                   <h4 className="text-base font-black uppercase tracking-widest text-white">{t.tournamentRevenue}</h4>
-                </div>
-                <div className="space-y-6 relative z-10">
-                  <div className={`flex justify-between items-center ${isRTL ? 'flex-row-reverse' : ''}`}>
-                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{t.entryFee}</span>
-                    <span className="text-sm font-black text-slate-300">{formatCurrency(tournamentData.entryFee)}</span>
-                  </div>
-                  <div className={`flex justify-between items-center ${isRTL ? 'flex-row-reverse' : ''}`}>
-                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{t.paid} ({tournamentData.paidParticipantIds.length})</span>
-                    <span className="text-base font-black text-emerald-400">+{formatCurrency(totalCollected)}</span>
-                  </div>
-                  <div className="h-px bg-slate-700/50"></div>
-                  <div className={`flex justify-between items-center ${isRTL ? 'flex-row-reverse' : ''}`}>
-                    <span className="text-xs font-black text-white uppercase tracking-widest">{t.totalCollected}</span>
-                    <span className="text-3xl font-black text-emerald-400 drop-shadow-lg">{formatCurrency(totalCollected)}</span>
-                  </div>
-                </div>
-              </div>
-            )}
+            <div className={`p-8 rounded-[2.5rem] bg-indigo-600 text-white shadow-2xl shadow-indigo-600/30`}>
+               <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-2">{t.tournamentRevenue}</p>
+               <h4 className="text-3xl font-black">{formatCurrency(totalCollected)}</h4>
+               <div className="h-px bg-white/20 my-4"></div>
+               <div className="flex justify-between items-center text-[10px] font-bold uppercase">
+                  <span>Entry: {formatCurrency(tournamentData.entryFee)}</span>
+                  <span>Paid: {paidIds.length}/{tournamentData.participants.length}</span>
+               </div>
+            </div>
           </div>
         </div>
 
         {showSummary && (
-           <div className="fixed inset-0 bg-black/95 backdrop-blur-xl z-[120] flex items-center justify-center p-4 animate-in fade-in duration-400">
-             <div className={`w-full max-w-5xl rounded-[3rem] border shadow-2xl overflow-hidden flex flex-col max-h-[85vh] ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}`}>
-                <div className={`p-8 border-b flex justify-between items-center bg-gradient-to-r from-indigo-700 to-indigo-900 text-white shrink-0 relative ${isRTL ? 'flex-row-reverse' : ''}`}>
-                   <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-white/10 via-transparent to-transparent opacity-30"></div>
-                   <div className={`flex items-center gap-4 relative z-10 ${isRTL ? 'flex-row-reverse' : ''}`}>
-                      <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center border border-white/20">
-                         <Layout size={28} />
-                      </div>
-                      <div className={isRTL ? 'text-right' : ''}>
-                         <h3 className="text-xl font-black">{t.bracketSummary}</h3>
-                         <div className="flex items-center gap-3 mt-1">
-                            <span className="px-2 py-0.5 bg-black/20 rounded text-[9px] font-black uppercase tracking-widest border border-white/10">
-                              <Users size={10} className="inline mr-1" /> {tournamentData.participants.length} Players
-                            </span>
-                         </div>
-                      </div>
+          <div className="fixed inset-0 bg-black/95 backdrop-blur-xl z-[200] flex items-center justify-center p-4 animate-in fade-in duration-300">
+             <div className="w-full max-w-6xl h-full flex flex-col space-y-6">
+                <div className={`flex justify-between items-center ${isRTL ? 'flex-row-reverse' : ''}`}>
+                   <div className={`flex items-center gap-4 ${isRTL ? 'flex-row-reverse text-right' : ''}`}>
+                      <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 flex items-center justify-center text-indigo-400"><Layout size={24} /></div>
+                      <h3 className="text-2xl font-black text-white">{t.bracketSummary}</h3>
                    </div>
-                   <button onClick={() => setShowSummary(false)} className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/30 transition-all active:scale-90 border border-white/10">
-                     <X size={20} />
-                   </button>
+                   <button onClick={() => setShowSummary(false)} className="w-12 h-12 bg-slate-800 rounded-full flex items-center justify-center text-white"><X size={24} /></button>
                 </div>
 
-                <div className="flex-1 overflow-hidden p-8 bg-slate-900/40 relative">
-                   {renderBracketMap()}
-                </div>
+                <div className="flex-1 overflow-x-auto flex items-start gap-8 p-8 custom-scrollbar">
+                   {/* Current Round */}
+                   <div className="space-y-6 min-w-[280px]">
+                      <div className="px-4 py-2 bg-indigo-600 rounded-xl text-[10px] font-black text-white uppercase text-center">{t.round} {tournamentData.roundNumber} (Live)</div>
+                      {tournamentData.currentRoundMatches.map(m => (
+                        <div key={m.id} className="p-4 bg-slate-800 border border-slate-700 rounded-2xl space-y-2">
+                           <div className={`flex justify-between text-xs ${m.winnerId === m.p1Id ? 'text-emerald-400 font-bold' : 'text-slate-400'}`}>
+                              <span>{getPlayerName(m.p1Id, tournamentData.participants)}</span>
+                              <span>{m.p1Wins}</span>
+                           </div>
+                           <div className="h-px bg-slate-700"></div>
+                           <div className={`flex justify-between text-xs ${m.winnerId === m.p2Id ? 'text-emerald-400 font-bold' : 'text-slate-400'}`}>
+                              <span>{getPlayerName(m.p2Id, tournamentData.participants)}</span>
+                              <span>{m.p2Wins}</span>
+                           </div>
+                        </div>
+                      ))}
+                      {tournamentData.byePlayerId && (
+                        <div className="p-4 bg-indigo-500/10 border border-dashed border-indigo-500/30 rounded-2xl text-[10px] font-black text-indigo-400 text-center">
+                          {getPlayerName(tournamentData.byePlayerId, tournamentData.participants)} (BYE)
+                        </div>
+                      )}
+                   </div>
 
-                <div className="p-6 border-t border-slate-700/50 bg-slate-900/60 shrink-0 flex justify-center">
-                   <button onClick={() => setShowSummary(false)} className="w-full max-w-xs py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-black transition-all shadow-xl shadow-indigo-600/20 uppercase tracking-widest text-xs">
-                     {isRTL ? 'داخستن' : 'Close Bracket'}
-                   </button>
+                   {/* History Rounds */}
+                   {[...tournamentData.roundHistory].reverse().map((round, rIdx) => (
+                      <div key={rIdx} className="space-y-6 min-w-[280px] opacity-60">
+                         <div className="px-4 py-2 bg-slate-700 rounded-xl text-[10px] font-black text-white uppercase text-center">{t.round} {tournamentData.roundHistory.length - rIdx}</div>
+                         {round.matches.map(m => (
+                           <div key={m.id} className="p-4 bg-slate-900 border border-slate-800 rounded-2xl space-y-2">
+                              <div className={`flex justify-between text-xs ${m.winnerId === m.p1Id ? 'text-emerald-400 font-bold' : 'text-slate-50'}`}>
+                                 <span>{getPlayerName(m.p1Id, tournamentData.participants)}</span>
+                                 <span>{m.p1Wins}</span>
+                              </div>
+                              <div className="h-px bg-slate-800"></div>
+                              <div className={`flex justify-between text-xs ${m.winnerId === m.p2Id ? 'text-emerald-400 font-bold' : 'text-slate-50'}`}>
+                                 <span>{getPlayerName(m.p2Id, tournamentData.participants)}</span>
+                                 <span>{m.p2Wins}</span>
+                              </div>
+                           </div>
+                         ))}
+                         {round.byeId && (
+                           <div className="p-4 bg-slate-900/50 border border-dashed border-slate-700 rounded-2xl text-[10px] font-black text-slate-500 text-center">
+                             {getPlayerName(round.byeId, tournamentData.participants)} (BYE)
+                           </div>
+                         )}
+                      </div>
+                   ))}
                 </div>
              </div>
-           </div>
+          </div>
         )}
       </div>
     );
   };
 
   const renderFinished = () => {
-    if (!tournamentData) return null;
-    const champion = tournamentData.participants.find(p => p.id === tournamentData.winnerId);
-
+    if (!tournamentData || !Array.isArray(tournamentData.participants)) return null;
+    const champion = tournamentData.participants.find(p => p && p.id === tournamentData.winnerId);
     return (
       <div className="flex flex-col items-center justify-center min-h-[70vh] text-center animate-in zoom-in-95 duration-500 space-y-12">
          <div className="relative group">
@@ -770,16 +681,12 @@ const TournamentManager: React.FC<TournamentManagerProps> = ({
                <Trophy size={100} className="text-white drop-shadow-2xl" />
             </div>
          </div>
-
          <div className="space-y-4">
             <h2 className="text-6xl font-black text-white uppercase tracking-tighter drop-shadow-2xl">{t.champion}!</h2>
             <div className="bg-slate-800/60 backdrop-blur-xl border border-amber-500/40 px-16 py-8 rounded-[3rem] shadow-2xl scale-110">
-               <div className="flex items-center justify-center gap-4">
-                 <p className="text-5xl font-black text-amber-400 tracking-tight">{champion?.name}</p>
-               </div>
+               <p className="text-5xl font-black text-amber-400 tracking-tight">{champion?.name || '---'}</p>
             </div>
          </div>
-
          <div className="flex flex-col sm:flex-row gap-6 w-full max-w-xl">
             <button onClick={() => setShowSummary(true)} className="flex-1 py-5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-[1.5rem] font-black flex items-center justify-center gap-3 shadow-2xl transition-all">
                <Layout size={24} /> {isRTL ? 'نەخشەی خول' : 'View Final Bracket'}
@@ -788,34 +695,17 @@ const TournamentManager: React.FC<TournamentManagerProps> = ({
                <Archive size={24} /> {t.archiveTournament}
             </button>
          </div>
-
-        {showSummary && (
-           <div className="fixed inset-0 bg-black/95 backdrop-blur-xl z-[120] flex items-center justify-center p-4">
-             <div className={`w-full max-w-5xl rounded-[3rem] border shadow-2xl overflow-hidden flex flex-col max-h-[85vh] ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}`}>
-                <div className={`p-8 border-b flex justify-between items-center bg-indigo-600 text-white shrink-0`}>
-                   <h3 className="text-xl font-black">{t.bracketSummary}</h3>
-                   <button onClick={() => setShowSummary(false)} className="w-10 h-10 rounded-full bg-black/20 flex items-center justify-center"><X size={20} /></button>
-                </div>
-                <div className="flex-1 overflow-hidden p-8 bg-slate-900/40">{renderBracketMap()}</div>
-                <div className="p-8 border-t border-slate-700 bg-slate-900/20 shrink-0">
-                   <button onClick={() => setShowSummary(false)} className="w-full py-5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-[1.5rem] font-black uppercase tracking-widest text-xs">
-                     {isRTL ? 'داخستن' : 'Close'}
-                   </button>
-                </div>
-             </div>
-           </div>
-        )}
       </div>
     );
   };
 
+  const hasTournament = tournamentData && Object.keys(tournamentData).length > 0;
+
   return (
     <div className="p-2 relative h-full">
-      <div>
-        {!tournamentData && renderSetup()}
-        {tournamentData?.status === 'ACTIVE' && renderActive()}
-        {tournamentData?.status === 'FINISHED' && renderFinished()}
-      </div>
+      {!hasTournament && renderSetup()}
+      {tournamentData?.status === 'ACTIVE' && renderActive()}
+      {tournamentData?.status === 'FINISHED' && renderFinished()}
     </div>
   );
 };

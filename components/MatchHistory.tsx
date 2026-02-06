@@ -3,14 +3,6 @@ import React, { useMemo, useState } from 'react';
 import { Transaction } from '../types';
 import { Swords, Clock, LayoutGrid, Search, Lock } from 'lucide-react';
 
-interface MatchHistoryProps {
-  transactions: Transaction[];
-  t: any;
-  isRTL: boolean;
-  isDark: boolean;
-  isAdmin: boolean;
-}
-
 interface IndividualGame {
   playerName: string;
   timestamp: number;
@@ -25,6 +17,14 @@ interface MatchSession {
   players: string[];
 }
 
+interface MatchHistoryProps {
+  transactions: Transaction[];
+  t: any;
+  isRTL: boolean;
+  isDark: boolean;
+  isAdmin: boolean;
+}
+
 const MatchHistory: React.FC<MatchHistoryProps> = ({ transactions, t, isRTL, isDark, isAdmin }) => {
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -32,16 +32,18 @@ const MatchHistory: React.FC<MatchHistoryProps> = ({ transactions, t, isRTL, isD
     // 1. Flatten all games from transactions
     const allGames: IndividualGame[] = [];
     transactions.forEach(tr => {
-      if (tr.gameStartTimes && tr.gameTables) {
-        tr.gameStartTimes.forEach((time, idx) => {
-          allGames.push({
-            playerName: tr.playerName,
-            timestamp: time,
-            tableNumber: tr.gameTables[idx] || 0,
-            transactionId: tr.id
-          });
+      // Robust check to ensure we are dealing with arrays
+      const times = Array.isArray(tr.gameStartTimes) ? tr.gameStartTimes : [];
+      const tables = Array.isArray(tr.gameTables) ? tr.gameTables : [];
+
+      times.forEach((time, idx) => {
+        allGames.push({
+          playerName: tr.playerName,
+          timestamp: time,
+          tableNumber: tables[idx] || 0,
+          transactionId: tr.id
         });
-      }
+      });
     });
 
     // 2. Sort by time

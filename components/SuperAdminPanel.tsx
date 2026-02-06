@@ -1,7 +1,8 @@
 
 import React, { useState, useMemo } from 'react';
 import { User, Role, UserStatus, UserUsageLimits, Notification } from '../types';
-import { Building2, UserPlus, Shield, Trash2, Key, Search, LayoutGrid, CheckCircle2, Lock, Plus, Building, Clock, Calendar, ShieldAlert, ShieldCheck, Timer, Minus, MessageSquare, Send, X, Bell, Zap, Gauge, CalendarDays, CalendarRange, Infinity, BarChart3 } from 'lucide-react';
+import { Building2, UserPlus, Shield, Trash2, Key, Search, LayoutGrid, CheckCircle2, Lock, Plus, Building, Clock, Calendar, ShieldAlert, ShieldCheck, Timer, Minus, MessageSquare, Send, X, Bell, Zap, Gauge, CalendarDays, CalendarRange, Infinity, BarChart3, Loader2, Phone, MapPin, Edit3, Save } from 'lucide-react';
+import { syncToCloud } from '../services/firebaseService';
 
 interface SuperAdminPanelProps {
   users: User[];
@@ -18,14 +19,26 @@ const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ users, setUsers, t, i
   const [newUsername, setNewUsername] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newHallId, setNewHallId] = useState('');
+  const [newPhone, setNewPhone] = useState('');
+  const [newAddress, setNewAddress] = useState('');
   const [duration, setDuration] = useState<number>(1); // Months
   const [maxUses, setMaxUses] = useState<number>(4);
   const [sessionHours, setSessionHours] = useState<number>(5);
   const [searchTerm, setSearchTerm] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
   
   // Messaging state
   const [messagingUser, setMessagingUser] = useState<User | null>(null);
   const [tempMessage, setTempMessage] = useState('');
+
+  // Editing state
+  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [editFields, setEditFields] = useState({
+    username: '',
+    password: '',
+    phoneNumber: '',
+    address: ''
+  });
 
   const managers = useMemo(() => {
     return users.filter(u => u.role === Role.MANAGER || (u.role === Role.ADMIN && u.hallId));
@@ -38,33 +51,95 @@ const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ users, setUsers, t, i
     );
   }, [managers, searchTerm]);
 
-  const createManager = () => {
-    if (!newUsername || !newPassword || !newHallId) return;
+  const createManager = async () => {
+    const trimmedHallId = newHallId.trim();
+    if (!newUsername || !newPassword || !trimmedHallId) {
+      alert(isRTL ? "تکایە هەموو خانەکان پڕ بکەرەوە!" : "Please fill all fields!");
+      return;
+    }
+
+    setIsSaving(true);
+
     const expirationDate = new Date();
     expirationDate.setMonth(expirationDate.getMonth() + duration);
+    
     const newManager: User = {
       id: Math.random().toString(36).substr(2, 9),
       username: newUsername.trim(),
       password: newPassword.trim(),
       role: Role.MANAGER,
       permissions: ['all'], 
-      hallId: newHallId.trim(),
+      hallId: trimmedHallId,
       status: 'ACTIVE',
       subscriptionExpiresAt: expirationDate.getTime(),
+      phoneNumber: newPhone.trim(),
+      address: newAddress.trim(),
       usageLimits: {
         maxUsesPerMonth: maxUses,
         sessionDurationHours: sessionHours,
         history: []
       }
     };
-    setUsers(prev => [...prev, newManager]);
-    setNewUsername('');
-    setNewPassword('');
-    setNewHallId('');
+
+    const updatedUsersList = [...users, newManager];
+
+    try {
+      setUsers(updatedUsersList);
+      await syncToCloud('users', updatedUsersList);
+      setNewUsername('');
+      setNewPassword('');
+      setNewHallId('');
+      setNewPhone('');
+      setNewAddress('');
+      alert(isRTL ? "بەڕێوەبەری نوێ بە سەرکەوتوویی دروستکرا و سەیڤ کرا!" : "New manager successfully created and synced!");
+    } catch (error) {
+      console.error("Cloud Error:", error);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const updateQuota = (userId: string, key: keyof UserUsageLimits, val: number) => {
-    setUsers(prev => prev.map(u => {
+  const handleOpenEdit = (user: User) => {
+    setEditingUser(user);
+    setEditFields({
+      username: user.username,
+      password: user.password,
+      phoneNumber: user.phoneNumber || '',
+      address: user.address || ''
+    });
+  };
+
+  const handleUpdateManager = async () => {
+    if (!editingUser) return;
+    setIsSaving(true);
+
+    const updatedList = users.map(u => {
+      if (u.id === editingUser.id) {
+        return {
+          ...u,
+          username: editFields.username.trim(),
+          password: editFields.password.trim(),
+          phoneNumber: editFields.phoneNumber.trim(),
+          address: editFields.address.trim()
+        };
+      }
+      return u;
+    });
+
+    try {
+      setUsers(updatedList);
+      await syncToCloud('users', updatedList);
+      setEditingUser(null);
+      alert(isRTL ? "زانیارییەکان بە سەرکەوتوویی نوێکرانەوە" : "Profile updated successfully");
+    } catch (error) {
+      alert("Error updating: " + error);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const updateQuota = async (userId: string, key: keyof UserUsageLimits, val: number) => {
+    const updatedList = users.map(u => {
       if (u.id === userId) {
         const currentLimits = u.usageLimits || { maxUsesPerMonth: 4, sessionDurationHours: 5, history: [] };
         return { 
@@ -73,19 +148,30 @@ const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ users, setUsers, t, i
         };
       }
       return u;
-    }));
+    });
+    setUsers(updatedList);
+    try {
+      await syncToCloud('users', updatedList);
+    } catch (e) { console.error(e); }
   };
 
-  const toggleLock = (userId: string) => {
+  const toggleLock = async (userId: string) => {
     const targetUser = users.find(u => u.id === userId);
-    // Super Admins should not be locked
     if (targetUser?.role === Role.ADMIN) return;
 
-    setUsers(prev => prev.map(u => u.id === userId ? { ...u, status: u.status === 'LOCKED' ? 'ACTIVE' : 'LOCKED' } : u));
+    const updatedList: User[] = users.map(u => 
+      u.id === userId 
+        ? { ...u, status: (u.status === 'LOCKED' ? 'ACTIVE' : 'LOCKED') as UserStatus } 
+        : u
+    );
+    setUsers(updatedList);
+    try {
+      await syncToCloud('users', updatedList);
+    } catch (e) { console.error(e); }
   };
 
-  const adjustSubscription = (userId: string, months: number, days: number = 0) => {
-    setUsers(prev => prev.map(u => {
+  const adjustSubscription = async (userId: string, months: number, days: number = 0) => {
+    const updatedList = users.map(u => {
       if (u.id === userId) {
         const currentExp = u.subscriptionExpiresAt || Date.now();
         const newExpDate = new Date(currentExp);
@@ -99,10 +185,14 @@ const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ users, setUsers, t, i
         };
       }
       return u;
-    }));
+    });
+    setUsers(updatedList);
+    try {
+      await syncToCloud('users', updatedList);
+    } catch (e) { console.error(e); }
   };
 
-  const sendSystemNotification = () => {
+  const sendSystemNotification = async () => {
     if (!messagingUser || !tempMessage.trim()) return;
     const newNote: Notification = {
       id: Math.random().toString(36).substr(2, 9),
@@ -110,21 +200,33 @@ const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ users, setUsers, t, i
       hallId: messagingUser.hallId!,
       timestamp: Date.now()
     };
-    setNotifications(prev => [newNote, ...prev]);
-    setTempMessage('');
-    setMessagingUser(null);
+    const updatedNotes = [newNote, ...notifications];
+    setNotifications(updatedNotes);
+    try {
+      await syncToCloud('notifications', updatedNotes);
+      setTempMessage('');
+      setMessagingUser(null);
+    } catch (e) { alert("Message sync failed."); }
   };
 
-  const removeNotification = (id: string) => {
-    setNotifications(prev => prev.filter(n => n.id !== id));
+  const removeNotification = async (id: string) => {
+    const updated = notifications.filter(n => n.id !== id);
+    setNotifications(updated);
+    try {
+      await syncToCloud('notifications', updated);
+    } catch (e) { console.error(e); }
   };
 
-  const removeManager = (id: string) => {
+  const removeManager = async (id: string) => {
     const targetUser = users.find(u => u.id === id);
-    if (targetUser?.role === Role.ADMIN) return; // Prevent deleting admins
+    if (targetUser?.role === Role.ADMIN) return;
 
     if (confirm(isRTL ? 'ئایا دڵنیایت لە سڕینەوەی ئەم بەڕێوەبەرە؟' : 'Are you sure you want to remove this manager?')) {
-      setUsers(prev => prev.filter(u => u.id !== id));
+      const updated = users.filter(u => u.id !== id);
+      setUsers(updated);
+      try {
+        await syncToCloud('users', updated);
+      } catch (e) { alert("Delete sync failed."); }
     }
   };
 
@@ -147,7 +249,7 @@ const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ users, setUsers, t, i
            </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
            <div className="space-y-2">
               <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-1">{t.hallId}</label>
               <input type="text" value={newHallId} onChange={(e) => setNewHallId(e.target.value)} placeholder="e.g. golden-cue" className={`w-full bg-slate-900 border border-slate-700 rounded-2xl px-6 py-4 text-white focus:outline-none focus:border-indigo-500 font-bold ${isRTL ? 'text-right' : ''}`} />
@@ -159,6 +261,20 @@ const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ users, setUsers, t, i
            <div className="space-y-2">
               <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-1">{t.password}</label>
               <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className={`w-full bg-slate-900 border border-slate-700 rounded-2xl px-6 py-4 text-white focus:outline-none focus:border-indigo-500 font-bold ${isRTL ? 'text-right' : ''}`} />
+           </div>
+           <div className="space-y-2">
+              <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-1">{t.phoneNumber}</label>
+              <div className="relative">
+                <input type="text" value={newPhone} onChange={(e) => setNewPhone(e.target.value)} placeholder="07XX XXX XXXX" className={`w-full bg-slate-900 border border-slate-700 rounded-2xl px-6 py-4 text-white focus:outline-none focus:border-indigo-500 font-bold ${isRTL ? 'text-right' : ''}`} />
+                <Phone className={`absolute top-1/2 -translate-y-1/2 text-slate-600 ${isRTL ? 'left-4' : 'right-4'}`} size={18} />
+              </div>
+           </div>
+           <div className="lg:col-span-2 space-y-2">
+              <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-1">{t.address}</label>
+              <div className="relative">
+                <input type="text" value={newAddress} onChange={(e) => setNewAddress(e.target.value)} placeholder="..." className={`w-full bg-slate-900 border border-slate-700 rounded-2xl px-6 py-4 text-white focus:outline-none focus:border-indigo-500 font-bold ${isRTL ? 'text-right' : ''}`} />
+                <MapPin className={`absolute top-1/2 -translate-y-1/2 text-slate-600 ${isRTL ? 'left-4' : 'right-4'}`} size={18} />
+              </div>
            </div>
         </div>
 
@@ -182,11 +298,16 @@ const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ users, setUsers, t, i
                  <span className="flex-1 text-center font-black text-xl text-white">{sessionHours}</span>
                  <button onClick={() => setSessionHours(sessionHours + 1)} className="w-12 h-12 bg-indigo-600 rounded-xl flex items-center justify-center text-white hover:bg-indigo-500 transition-all">+</button>
               </div>
-           </div>
+        </div>
         </div>
 
-        <button onClick={createManager} disabled={!newUsername || !newPassword || !newHallId} className="w-full py-5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-[1.5rem] font-black text-lg transition-all shadow-xl active:scale-95 flex items-center justify-center gap-3">
-          <Plus size={24} /> {t.createAccount}
+        <button 
+          onClick={createManager} 
+          disabled={!newUsername || !newPassword || !newHallId || isSaving} 
+          className="w-full py-5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-[1.5rem] font-black text-lg transition-all shadow-xl active:scale-95 flex items-center justify-center gap-3"
+        >
+          {isSaving ? <Loader2 className="animate-spin" size={24} /> : <Plus size={24} />}
+          {isSaving ? (isRTL ? "لە پڕۆسەی سەیڤکردندایە..." : "Saving...") : t.createAccount}
         </button>
       </div>
 
@@ -221,12 +342,15 @@ const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ users, setUsers, t, i
                         <p className="text-[10px] text-indigo-400 font-bold uppercase tracking-widest mt-1">ID: {manager.hallId}</p>
                       </div>
                    </div>
-                   <div className="flex gap-2">
+                   <div className="flex flex-wrap gap-2 justify-end max-w-[120px]">
                     <button onClick={() => onViewHall && manager.hallId && onViewHall(manager.hallId)} className="p-2.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-xl hover:bg-emerald-500 hover:text-white transition-all" title={t.viewDashboard}>
                        <BarChart3 size={18} />
                      </button>
                     <button onClick={() => setMessagingUser(manager)} className="p-2.5 bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 rounded-xl hover:bg-indigo-500 hover:text-white transition-all">
                        <MessageSquare size={18} />
+                     </button>
+                    <button onClick={() => handleOpenEdit(manager)} className="p-2.5 bg-blue-500/10 text-blue-400 border border-blue-500/20 rounded-xl hover:bg-blue-500 hover:text-white transition-all" title={isRTL ? 'دەستکاری' : 'Edit Manager'}>
+                       <Edit3 size={18} />
                      </button>
                     {!isAd && (
                       <button onClick={() => toggleLock(manager.id)} className={`p-2.5 rounded-xl border transition-all ${isLocked ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20 hover:bg-emerald-500 hover:text-white' : 'bg-rose-500/10 text-rose-500 border-rose-500/20 hover:bg-rose-500 hover:text-white'}`}>
@@ -239,10 +363,29 @@ const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ users, setUsers, t, i
                    </div>
                 </div>
 
+                {/* Contact Info Display */}
+                <div className={`mb-6 space-y-2 p-4 bg-slate-900/40 rounded-2xl border border-slate-700/50 ${isRTL ? 'text-right' : ''}`}>
+                   {manager.phoneNumber && (
+                      <div className={`flex items-center gap-3 text-slate-300 ${isRTL ? 'flex-row-reverse' : ''}`}>
+                         <Phone size={14} className="text-emerald-500" />
+                         <span className="text-xs font-bold font-mono tracking-tight">{manager.phoneNumber}</span>
+                      </div>
+                   )}
+                   {manager.address && (
+                      <div className={`flex items-center gap-3 text-slate-300 ${isRTL ? 'flex-row-reverse' : ''}`}>
+                         <MapPin size={14} className="text-rose-500" />
+                         <span className="text-[10px] font-bold leading-tight">{manager.address}</span>
+                      </div>
+                   )}
+                   {!manager.phoneNumber && !manager.address && (
+                      <p className="text-[8px] text-slate-600 font-bold uppercase italic">{isRTL ? 'زانیاری پەیوەندی نییە' : 'No contact info'}</p>
+                   )}
+                </div>
+
                 {/* Status & Info Grid */}
                 <div className="grid grid-cols-2 gap-3 mb-6">
                    <div className={`p-3 rounded-2xl bg-slate-900/50 border border-slate-700/50 flex flex-col justify-center items-center gap-1`}>
-                      <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">{t.status}</span>
+                      <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">{isRTL ? 'بارودۆخ' : 'Status'}</span>
                       <div className="flex items-center gap-1.5">
                         <div className={`w-1.5 h-1.5 rounded-full ${isLocked ? 'bg-rose-500' : isExpired ? 'bg-amber-500' : 'bg-emerald-500'}`}></div>
                         <span className={`text-[10px] font-black uppercase ${isLocked ? t.locked : isExpired ? 'Expired' : t.active}`}>{isLocked ? t.locked : isExpired ? 'Expired' : t.active}</span>
@@ -294,7 +437,6 @@ const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ users, setUsers, t, i
                    </div>
                    
                    <div className="grid grid-cols-1 gap-2">
-                      {/* Months */}
                       <div className={`flex items-center gap-2 ${isRTL ? 'flex-row-reverse' : ''}`}>
                          <div className="flex-1 flex gap-1">
                             <button onClick={() => adjustSubscription(manager.id, -1)} className="flex-1 py-2 bg-rose-600/10 text-rose-400 border border-rose-500/20 rounded-xl hover:bg-rose-500 hover:text-white transition-all text-[8px] font-black uppercase">-1M</button>
@@ -304,8 +446,6 @@ const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ users, setUsers, t, i
                             <Calendar size={14} />
                          </div>
                       </div>
-
-                      {/* Weeks */}
                       <div className={`flex items-center gap-2 ${isRTL ? 'flex-row-reverse' : ''}`}>
                          <div className="flex-1 flex gap-1">
                             <button onClick={() => adjustSubscription(manager.id, 0, -7)} className="flex-1 py-2 bg-rose-600/10 text-rose-400 border border-rose-500/20 rounded-xl hover:bg-rose-500 hover:text-white transition-all text-[8px] font-black uppercase">-1W</button>
@@ -315,8 +455,6 @@ const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ users, setUsers, t, i
                             <CalendarDays size={14} />
                          </div>
                       </div>
-
-                      {/* Days */}
                       <div className={`flex items-center gap-2 ${isRTL ? 'flex-row-reverse' : ''}`}>
                          <div className="flex-1 flex gap-1">
                             <button onClick={() => adjustSubscription(manager.id, 0, -1)} className="flex-1 py-2 bg-rose-600/10 text-rose-400 border border-rose-500/20 rounded-xl hover:bg-rose-500 hover:text-white transition-all text-[8px] font-black uppercase">-1D</button>
@@ -333,6 +471,88 @@ const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ users, setUsers, t, i
            })}
         </div>
       </div>
+
+      {/* Edit Manager Modal */}
+      {editingUser && (
+        <div className="fixed inset-0 bg-black/95 backdrop-blur-md z-[200] flex items-center justify-center p-4">
+           <div className={`bg-slate-800 border border-indigo-500/30 w-full max-w-lg rounded-[2.5rem] p-8 shadow-2xl animate-in zoom-in-95 ${isRTL ? 'text-right' : ''}`}>
+              <div className={`flex justify-between items-center mb-8 ${isRTL ? 'flex-row-reverse' : ''}`}>
+                 <div className={`flex items-center gap-4 ${isRTL ? 'flex-row-reverse text-right' : ''}`}>
+                    <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 shadow-inner">
+                      <Edit3 size={24} />
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-black text-white">{isRTL ? 'دەستکاری زانیارییەکان' : 'Edit Profile'}</h3>
+                      <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">Hall ID: {editingUser.hallId}</p>
+                    </div>
+                 </div>
+                 <button onClick={() => setEditingUser(null)} className="text-slate-500 hover:text-white"><X size={24} /></button>
+              </div>
+
+              <div className="space-y-6">
+                <div className="space-y-2">
+                   <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-1">{t.username}</label>
+                   <input 
+                      type="text" 
+                      value={editFields.username} 
+                      onChange={(e) => setEditFields({...editFields, username: e.target.value})}
+                      className={`w-full bg-slate-900 border border-slate-700 rounded-2xl px-6 py-4 text-white focus:outline-none focus:border-indigo-500 font-bold ${isRTL ? 'text-right' : ''}`}
+                   />
+                </div>
+                <div className="space-y-2">
+                   <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-1">{t.password}</label>
+                   <div className="relative">
+                    <input 
+                        type="password" 
+                        value={editFields.password} 
+                        onChange={(e) => setEditFields({...editFields, password: e.target.value})}
+                        className={`w-full bg-slate-900 border border-slate-700 rounded-2xl px-6 py-4 text-white focus:outline-none focus:border-indigo-500 font-bold ${isRTL ? 'text-right' : ''}`}
+                    />
+                    <Key className={`absolute top-1/2 -translate-y-1/2 text-slate-600 ${isRTL ? 'left-5' : 'right-5'}`} size={18} />
+                   </div>
+                </div>
+                <div className="space-y-2">
+                   <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-1">{t.phoneNumber}</label>
+                   <div className="relative">
+                    <input 
+                        type="text" 
+                        value={editFields.phoneNumber} 
+                        onChange={(e) => setEditFields({...editFields, phoneNumber: e.target.value})}
+                        className={`w-full bg-slate-900 border border-slate-700 rounded-2xl px-6 py-4 text-white focus:outline-none focus:border-indigo-500 font-bold ${isRTL ? 'text-right' : ''}`}
+                    />
+                    <Phone className={`absolute top-1/2 -translate-y-1/2 text-slate-600 ${isRTL ? 'left-5' : 'right-5'}`} size={18} />
+                   </div>
+                </div>
+                <div className="space-y-2">
+                   <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-1">{t.address}</label>
+                   <div className="relative">
+                    <input 
+                        type="text" 
+                        value={editFields.address} 
+                        onChange={(e) => setEditFields({...editFields, address: e.target.value})}
+                        className={`w-full bg-slate-900 border border-slate-700 rounded-2xl px-6 py-4 text-white focus:outline-none focus:border-indigo-500 font-bold ${isRTL ? 'text-right' : ''}`}
+                    />
+                    <MapPin className={`absolute top-1/2 -translate-y-1/2 text-slate-600 ${isRTL ? 'left-5' : 'right-5'}`} size={18} />
+                   </div>
+                </div>
+
+                <div className="flex gap-3 pt-4">
+                  <button onClick={() => setEditingUser(null)} className="flex-1 py-4 bg-slate-700 text-white font-black rounded-xl transition-all">
+                    {t.cancel}
+                  </button>
+                  <button 
+                    onClick={handleUpdateManager} 
+                    disabled={isSaving}
+                    className="flex-[2] py-4 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2"
+                  >
+                    {isSaving ? <Loader2 className="animate-spin" size={20} /> : <Save size={20} />}
+                    {t.save}
+                  </button>
+                </div>
+              </div>
+           </div>
+        </div>
+      )}
 
       {/* Messaging Modal */}
       {messagingUser && (

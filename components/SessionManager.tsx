@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Session, Transaction, AppSettings, User, PaymentMethod, Role, MarketOrder } from '../types';
-import { Plus, X, Clock, Calculator, Percent, Banknote, UserPlus, UserCheck, AlertCircle, PlayCircle, Lock, UserMinus, FileText, ChevronRight, ChevronLeft, Users, ChevronDown, ChevronUp, CheckCircle2, LayoutGrid, Search, Info, Coffee, ShoppingCart, Minus } from 'lucide-react';
+import { Plus, X, Clock, Calculator, Percent, Banknote, UserPlus, UserCheck, AlertCircle, PlayCircle, Lock, UserMinus, FileText, ChevronRight, ChevronLeft, Users, ChevronDown, ChevronUp, CheckCircle2, LayoutGrid, Search, Info, Coffee, ShoppingCart, Minus, AlertTriangle, ShieldAlert, Edit3 } from 'lucide-react';
 
 interface SessionManagerProps {
   sessions: Session[];
@@ -34,6 +34,8 @@ const SessionManager: React.FC<SessionManagerProps> = ({
   const [customPrice, setCustomPrice] = useState(settings.pricePerGame);
   const [error, setError] = useState('');
   const [paymentNote, setPaymentNote] = useState('');
+  const [actualPaidAmount, setActualPaidAmount] = useState<number>(0);
+  const [showManualPriceInput, setShowManualPriceInput] = useState(false);
   
   const [marketModalSessionId, setMarketModalSessionId] = useState<string | null>(null);
 
@@ -113,12 +115,13 @@ const SessionManager: React.FC<SessionManagerProps> = ({
     setNewPlayerName('');
   };
 
-  const calculateTieredDiscount = (games: number): number => {
-    if (games >= 15) return 5000;
-    if (games >= 11) return 4000;
-    if (games >= 9) return 3000;
-    if (games >= 7) return 2000;
-    if (games >= 4) return 1000;
+  const calculateTieredDiscount = (games: number, gameAmount: number): number => {
+    if (games < 4 || gameAmount < 3000) return 0;
+    const tiers = settings.discountTiers || {};
+    const gameCounts = Object.keys(tiers).map(Number).sort((a, b) => b - a);
+    for (const count of gameCounts) {
+      if (games >= count) return tiers[count];
+    }
     return 0;
   };
 
@@ -127,8 +130,15 @@ const SessionManager: React.FC<SessionManagerProps> = ({
   };
 
   const initiatePayment = (session: Session, method: PaymentMethod) => {
+    const gameAmount = session.gamesPlayed * session.pricePerGame;
+    const marketTotal = calculateMarketTotal(session.marketItems);
+    const discount = method === 'CREDIT' ? calculateTieredDiscount(session.gamesPlayed, gameAmount) : 0;
+    const expected = Math.max(0, gameAmount + marketTotal - discount);
+    
     setPendingPayment({ session, method });
+    setActualPaidAmount(expected);
     setPaymentNote('');
+    setShowManualPriceInput(false);
   };
 
   const finalizePayment = () => {
@@ -137,8 +147,8 @@ const SessionManager: React.FC<SessionManagerProps> = ({
 
     const gameAmount = session.gamesPlayed * session.pricePerGame;
     const marketTotal = calculateMarketTotal(session.marketItems);
-    const discount = method === 'CREDIT' ? calculateTieredDiscount(session.gamesPlayed) : 0;
-    const totalPaid = Math.max(0, gameAmount + marketTotal - discount);
+    const discount = method === 'CREDIT' ? calculateTieredDiscount(session.gamesPlayed, gameAmount) : 0;
+    const expectedTotal = Math.max(0, gameAmount + marketTotal - discount);
 
     const transaction: Transaction = {
       id: Math.random().toString(36).substr(2, 9),
@@ -147,7 +157,8 @@ const SessionManager: React.FC<SessionManagerProps> = ({
       amount: gameAmount,
       discount: discount,
       marketTotal: marketTotal,
-      totalPaid: totalPaid,
+      expectedTotal: expectedTotal,
+      totalPaid: actualPaidAmount,
       paymentMethod: method,
       timestamp: Date.now(),
       gameStartTimes: [...session.gameStartTimes],
@@ -155,7 +166,7 @@ const SessionManager: React.FC<SessionManagerProps> = ({
       collectedBy: currentUser.id,
       marketItems: [...session.marketItems],
       isSettled: method !== 'DEBT',
-      note: paymentNote.trim() || undefined
+      note: paymentNote.trim() || ""
     };
 
     setTransactions(prev => [transaction, ...prev]);
@@ -183,7 +194,6 @@ const SessionManager: React.FC<SessionManagerProps> = ({
             newMarketItems[existingItemIndex] = { ...newMarketItems[existingItemIndex], quantity: newQty };
           }
         } else if (delta > 0) {
-          // Find the price from the hall's configured market items
           const itemDef = (settings.marketItems || []).find(mi => mi.name === itemName);
           if (itemDef) {
             newMarketItems.push({ name: itemName, price: itemDef.price, quantity: delta });
@@ -397,7 +407,7 @@ const SessionManager: React.FC<SessionManagerProps> = ({
                       className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center border transition-all shadow-sm relative ${
                         marketCount > 0 
                         ? 'bg-amber-500 border-amber-600 text-white animate-bounce-short' 
-                        : (isDark ? 'bg-slate-900/50 border-slate-700 text-amber-500 hover:bg-amber-500/10' : 'bg-white border-amber-200 text-amber-600 hover:bg-amber-50')
+                        : (isDark ? 'bg-slate-900/50 border-slate-700 text-amber-500 hover:bg-amber-500/10' : 'bg-white border-amber-200 text-amber-600 hover:bg-emerald-50')
                       }`}
                     >
                       <Coffee size={14} />
@@ -477,7 +487,7 @@ const SessionManager: React.FC<SessionManagerProps> = ({
         })}
       </div>
 
-      {/* MARKET MENU MODAL - Updated to strictly use settings.marketItems */}
+      {/* MARKET MENU MODAL */}
       {marketModalSessionId && currentMarketSession && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[150] flex items-center justify-center p-4 animate-in fade-in duration-200">
            <div className={`w-full max-w-md rounded-[3rem] border shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}`}>
@@ -531,11 +541,6 @@ const SessionManager: React.FC<SessionManagerProps> = ({
                     </div>
                   );
                 })}
-                {(!settings.marketItems || settings.marketItems.length === 0) && (
-                   <div className="py-8 text-center text-slate-500 italic">
-                      {isRTL ? 'هیچ بابەتێکی مارکێت ئامادە نەکراوە.' : 'No market items configured.'}
-                   </div>
-                )}
               </div>
 
               <div className="p-6 bg-slate-900/40 border-t border-slate-700">
@@ -603,7 +608,7 @@ const SessionManager: React.FC<SessionManagerProps> = ({
         </div>
       )}
 
-      {/* Table Selection Modal (Triggered by +) */}
+      {/* Table Selection Modal */}
       {pendingTableSelect && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[100] flex items-center justify-center p-4">
            <div className={`w-full max-w-md rounded-[2.5rem] border shadow-2xl p-8 ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}`}>
@@ -612,9 +617,6 @@ const SessionManager: React.FC<SessionManagerProps> = ({
                     <LayoutGrid size={32} />
                  </div>
                  <h3 className="text-xl font-black text-white">{isRTL ? 'مێزەکە هەڵبژێرە' : 'Select Table'}</h3>
-                 <p className="text-xs text-slate-500 font-bold uppercase tracking-widest mt-1">
-                   {isRTL ? 'ئەم یارییە لە مێزی چەندە؟' : 'Which table for this game?'}
-                 </p>
               </div>
 
               <div className="grid grid-cols-3 sm:grid-cols-4 gap-3 max-h-60 overflow-y-auto custom-scrollbar p-1">
@@ -672,20 +674,6 @@ const SessionManager: React.FC<SessionManagerProps> = ({
                   </button>
                 </div>
               </div>
-              <div className="space-y-3">
-                <label className={`block text-[10px] font-black text-slate-500 uppercase tracking-widest ${isRTL ? 'text-right' : ''}`}>{t.playersDirectory}</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {players.map(player => (
-                    <button
-                      key={player}
-                      onClick={() => startSessionForPlayer(player)}
-                      className={`p-3 rounded-xl border font-bold transition-all text-xs truncate ${isDark ? 'bg-slate-700/50 border-slate-600 text-white' : 'bg-white border-slate-200 text-slate-700'}`}
-                    >
-                      {player}
-                    </button>
-                  ))}
-                </div>
-              </div>
             </div>
           </div>
         </div>
@@ -706,17 +694,6 @@ const SessionManager: React.FC<SessionManagerProps> = ({
                   <span className="font-black text-white">{selectedSession.playerName}</span>
                 </div>
                 <div className={`flex justify-between items-center ${isRTL ? 'flex-row-reverse' : ''}`}>
-                  <span className="text-slate-500 font-bold text-sm">{t.activeTables}:</span>
-                  <span className="font-black text-white">{formatCurrency(selectedSession.gamesPlayed * selectedSession.pricePerGame)}</span>
-                </div>
-                {selectedSession.marketItems && selectedSession.marketItems.length > 0 && (
-                   <div className={`flex justify-between items-center ${isRTL ? 'flex-row-reverse' : ''}`}>
-                     <span className="text-amber-500 font-bold text-sm">{t.marketTotal}:</span>
-                     <span className="font-black text-amber-500">+{formatCurrency(calculateMarketTotal(selectedSession.marketItems))}</span>
-                   </div>
-                )}
-                <div className="h-px bg-slate-700/50"></div>
-                <div className={`flex justify-between items-center ${isRTL ? 'flex-row-reverse' : ''}`}>
                   <span className="text-slate-300 font-black text-lg">{t.total}:</span>
                   <span className="text-2xl font-black text-emerald-400">{formatCurrency((selectedSession.gamesPlayed * selectedSession.pricePerGame) + calculateMarketTotal(selectedSession.marketItems))}</span>
                 </div>
@@ -726,10 +703,31 @@ const SessionManager: React.FC<SessionManagerProps> = ({
                   <Banknote size={24} />
                   <span className="font-black text-sm">{t.cash}</span>
                 </button>
-                <button onClick={() => initiatePayment(selectedSession, 'CREDIT')} className="p-6 border rounded-2xl bg-blue-600/10 border-blue-500/30 text-blue-500 hover:bg-blue-600 hover:text-white transition-all flex flex-col items-center gap-2">
+                
+                {/* CREDIT (Discount) Button - Visual dimming and disabling based on game count and total amount */}
+                <button 
+                  onClick={() => {
+                    const amount = selectedSession.gamesPlayed * selectedSession.pricePerGame;
+                    if (selectedSession.gamesPlayed >= 4 && amount >= 3000) {
+                      initiatePayment(selectedSession, 'CREDIT');
+                    }
+                  }} 
+                  disabled={selectedSession.gamesPlayed < 4 || (selectedSession.gamesPlayed * selectedSession.pricePerGame) < 3000}
+                  className={`p-6 border rounded-2xl transition-all flex flex-col items-center gap-2 ${
+                    (selectedSession.gamesPlayed >= 4 && (selectedSession.gamesPlayed * selectedSession.pricePerGame) >= 3000)
+                    ? 'bg-blue-600/10 border-blue-500/30 text-blue-500 hover:bg-blue-600 hover:text-white' 
+                    : 'bg-slate-700/40 border-slate-700 text-slate-500 opacity-40 cursor-not-allowed'
+                  }`}
+                >
                   <Percent size={24} />
                   <span className="font-black text-sm">{t.credit}</span>
+                  {(selectedSession.gamesPlayed < 4 || (selectedSession.gamesPlayed * selectedSession.pricePerGame) < 3000) && (
+                    <span className="text-[7px] font-bold uppercase tracking-tighter opacity-70">
+                      {selectedSession.gamesPlayed < 4 ? '(Min 4 Games)' : '(Min 3,000 IQD)'}
+                    </span>
+                  )}
                 </button>
+
                 <button onClick={() => initiatePayment(selectedSession, 'DEBT')} className="p-6 border rounded-2xl bg-amber-600/10 border-amber-500/30 text-amber-500 hover:bg-amber-600 hover:text-white transition-all flex flex-col items-center gap-2"><UserMinus size={24} /><span className="font-black text-sm">{t.debt}</span></button>
               </div>
             </div>
@@ -737,7 +735,7 @@ const SessionManager: React.FC<SessionManagerProps> = ({
         </div>
       )}
 
-      {/* Confirmation & Note Modal */}
+      {/* Confirmation & Note Modal with Detailed Breakdown */}
       {pendingPayment && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-xl z-[80] flex items-center justify-center p-4 animate-in fade-in zoom-in-95 duration-200">
           <div className={`w-full max-w-lg rounded-[2.5rem] border shadow-2xl overflow-hidden ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}`}>
@@ -752,58 +750,97 @@ const SessionManager: React.FC<SessionManagerProps> = ({
                   <span className="text-slate-500 text-xs font-bold uppercase tracking-widest">{t.player}</span>
                   <span className="text-lg font-black text-white">{pendingPayment.session.playerName}</span>
                 </div>
-                <div className="h-px bg-slate-700/30"></div>
-                <div className={`flex justify-between items-center ${isRTL ? 'flex-row-reverse' : ''}`}>
-                   <span className="text-slate-500 text-xs font-bold uppercase tracking-widest">{t.gamesPlayed}</span>
-                   <span className="text-white font-black">{pendingPayment.session.gamesPlayed}</span>
-                </div>
-                {pendingPayment.session.marketItems && pendingPayment.session.marketItems.length > 0 && (
-                   <div className={`flex justify-between items-center ${isRTL ? 'flex-row-reverse' : ''}`}>
-                      <span className="text-slate-500 text-xs font-bold uppercase tracking-widest">{t.market}</span>
-                      <span className="text-amber-500 font-black">{formatCurrency(calculateMarketTotal(pendingPayment.session.marketItems))}</span>
-                   </div>
-                )}
-                <div className={`flex justify-between items-center ${isRTL ? 'flex-row-reverse' : ''}`}>
-                   <span className="text-slate-500 text-xs font-bold uppercase tracking-widest">{t.method}</span>
-                   <span className={`font-black text-sm px-3 py-1 rounded-full ${
-                     pendingPayment.method === 'CASH' ? 'bg-emerald-500/20 text-emerald-400' : 
-                     pendingPayment.method === 'CREDIT' ? 'bg-blue-500/20 text-blue-400' : 
-                     'bg-amber-500/20 text-amber-400'
-                   }`}>
-                     {pendingPayment.method === 'CASH' ? t.cash : pendingPayment.method === 'CREDIT' ? t.credit : t.debt}
-                   </span>
-                </div>
-                {pendingPayment.method === 'CREDIT' && (
-                  <div className={`flex justify-between items-center text-rose-400 ${isRTL ? 'flex-row-reverse' : ''}`}>
-                    <span className="text-xs font-bold uppercase tracking-widest">{t.discount}</span>
-                    <span className="font-black">-{formatCurrency(calculateTieredDiscount(pendingPayment.session.gamesPlayed))}</span>
+                
+                <div className="h-px bg-slate-700/50"></div>
+
+                {/* Detailed Breakdown */}
+                <div className="space-y-2">
+                  <div className={`flex justify-between items-center text-sm ${isRTL ? 'flex-row-reverse' : ''}`}>
+                    <span className="text-slate-400">{t.gamesPlayed} ({pendingPayment.session.gamesPlayed}):</span>
+                    <span className="text-white font-bold">{formatCurrency(pendingPayment.session.gamesPlayed * pendingPayment.session.pricePerGame)}</span>
                   </div>
-                )}
-                <div className="h-px bg-slate-700/30"></div>
+                  
+                  {calculateMarketTotal(pendingPayment.session.marketItems) > 0 && (
+                    <div className={`flex justify-between items-center text-sm ${isRTL ? 'flex-row-reverse' : ''}`}>
+                      <span className="text-amber-500/80">{t.marketTotal}:</span>
+                      <span className="text-amber-500 font-bold">+{formatCurrency(calculateMarketTotal(pendingPayment.session.marketItems))}</span>
+                    </div>
+                  )}
+
+                  {pendingPayment.method === 'CREDIT' && calculateTieredDiscount(pendingPayment.session.gamesPlayed, pendingPayment.session.gamesPlayed * pendingPayment.session.pricePerGame) > 0 && (
+                    <div className={`flex justify-between items-center text-sm ${isRTL ? 'flex-row-reverse' : ''}`}>
+                      <span className="text-rose-400/80">{t.credit} ({t.discount}):</span>
+                      <span className="text-rose-400 font-bold">-{formatCurrency(calculateTieredDiscount(pendingPayment.session.gamesPlayed, pendingPayment.session.gamesPlayed * pendingPayment.session.pricePerGame))}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="h-px bg-slate-700/50"></div>
+
                 <div className={`flex justify-between items-center ${isRTL ? 'flex-row-reverse' : ''}`}>
-                  <span className="text-slate-300 font-black text-lg">{t.totalPaid}</span>
-                  <span className="text-3xl font-black text-emerald-400">
-                    {formatCurrency(Math.max(0, (pendingPayment.session.gamesPlayed * pendingPayment.session.pricePerGame) + calculateMarketTotal(pendingPayment.session.marketItems) - (pendingPayment.method === 'CREDIT' ? calculateTieredDiscount(pendingPayment.session.gamesPlayed) : 0)))}
+                  <span className="text-slate-300 font-black text-lg">{pendingPayment.method === 'DEBT' ? t.totalDebt : (isRTL ? 'کۆی گشتی داواکراو' : 'Total Expected')}</span>
+                  <span className={`text-2xl font-black ${pendingPayment.method === 'DEBT' ? 'text-amber-500' : 'text-slate-200'}`}>
+                    {formatCurrency(Math.max(0, (pendingPayment.session.gamesPlayed * pendingPayment.session.pricePerGame) + calculateMarketTotal(pendingPayment.session.marketItems) - (pendingPayment.method === 'CREDIT' ? calculateTieredDiscount(pendingPayment.session.gamesPlayed, pendingPayment.session.gamesPlayed * pendingPayment.session.pricePerGame) : 0)))}
                   </span>
                 </div>
+              </div>
+
+              {/* Received Amount Toggle & Warning */}
+              <div className="space-y-4">
+                 <div className={`flex items-center justify-between px-1 ${isRTL ? 'flex-row-reverse' : ''}`}>
+                   <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{isRTL ? 'بڕی وەرگیراو' : 'Amount Received'}</span>
+                   <button 
+                    onClick={() => setShowManualPriceInput(!showManualPriceInput)}
+                    className={`p-2 rounded-xl transition-all ${showManualPriceInput ? 'bg-amber-500 text-white shadow-lg' : 'bg-slate-800 text-amber-500 border border-amber-500/20'}`}
+                   >
+                     {showManualPriceInput ? <X size={16} /> : <ShieldAlert size={16} />}
+                   </button>
+                 </div>
+
+                 {showManualPriceInput && (
+                   <div className="animate-in slide-in-from-top-2 duration-300 space-y-4">
+                      <div className="relative">
+                        <input 
+                          type="number"
+                          autoFocus
+                          value={actualPaidAmount}
+                          onChange={(e) => setActualPaidAmount(Number(e.target.value))}
+                          className={`w-full bg-slate-900 border border-amber-500/50 rounded-2xl py-5 px-6 text-white text-3xl font-black focus:outline-none focus:border-amber-500 transition-all shadow-inner ${isRTL ? 'text-right' : ''}`}
+                        />
+                        <div className={`absolute top-1/2 -translate-y-1/2 text-slate-500 font-bold text-xs ${isRTL ? 'left-6' : 'right-6'}`}>IQD</div>
+                      </div>
+
+                      {actualPaidAmount !== Math.max(0, (pendingPayment.session.gamesPlayed * pendingPayment.session.pricePerGame) + calculateMarketTotal(pendingPayment.session.marketItems) - (pendingPayment.method === 'CREDIT' ? calculateTieredDiscount(pendingPayment.session.gamesPlayed, pendingPayment.session.gamesPlayed * pendingPayment.session.pricePerGame) : 0)) && (
+                        <div className="p-4 bg-rose-500/10 border border-rose-500/30 rounded-2xl flex items-center gap-3 text-rose-500 animate-pulse">
+                           <AlertTriangle size={24} className="shrink-0" />
+                           <p className="text-xs font-black uppercase leading-tight">
+                             {isRTL ? 'ئەم نرخە دەرچوونە لە یاساکان' : 'This price is a violation of the rules'}
+                           </p>
+                        </div>
+                      )}
+                   </div>
+                 )}
               </div>
 
               <div className="space-y-3">
                 <label className={`block text-[10px] font-black text-slate-500 uppercase tracking-widest px-1 ${isRTL ? 'text-right' : ''}`}>{t.note}</label>
                 <textarea 
                   value={paymentNote}
-                  // Fixed typo: was setPlayerNote, should be setPaymentNote
                   onChange={(e) => setPaymentNote(e.target.value)}
                   placeholder={t.addNote}
-                  className={`w-full min-h-[100px] bg-slate-900 border border-slate-700 rounded-2xl p-4 text-white focus:outline-none focus:border-emerald-500 font-medium transition-all resize-none ${isRTL ? 'text-right' : ''}`}
+                  className={`w-full min-h-[80px] bg-slate-900 border border-slate-700 rounded-2xl p-4 text-white focus:outline-none focus:border-emerald-500 font-medium transition-all resize-none ${isRTL ? 'text-right' : ''}`}
                 />
               </div>
 
               <button 
                 onClick={finalizePayment}
-                className="w-full py-5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-[1.5rem] font-black text-xl shadow-2xl shadow-emerald-600/20 transition-all flex items-center justify-center gap-3 active:scale-95"
+                className={`w-full py-5 rounded-[1.5rem] font-black text-xl shadow-2xl transition-all flex items-center justify-center gap-3 active:scale-95 ${
+                  pendingPayment.method === 'DEBT' 
+                    ? 'bg-amber-600 hover:bg-amber-500 shadow-amber-600/20' 
+                    : (actualPaidAmount < Math.max(0, (pendingPayment.session.gamesPlayed * pendingPayment.session.pricePerGame) + calculateMarketTotal(pendingPayment.session.marketItems) - (pendingPayment.method === 'CREDIT' ? calculateTieredDiscount(pendingPayment.session.gamesPlayed, pendingPayment.session.gamesPlayed * pendingPayment.session.pricePerGame) : 0)) ? 'bg-rose-600 hover:bg-rose-500 shadow-rose-600/20' : 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-600/20')
+                }`}
               >
-                <CheckCircle2 size={24} />
+                {pendingPayment.method === 'DEBT' ? <UserMinus size={24} /> : (actualPaidAmount < Math.max(0, (pendingPayment.session.gamesPlayed * pendingPayment.session.pricePerGame) + calculateMarketTotal(pendingPayment.session.marketItems) - (pendingPayment.method === 'CREDIT' ? calculateTieredDiscount(pendingPayment.session.gamesPlayed, pendingPayment.session.gamesPlayed * pendingPayment.session.pricePerGame) : 0)) ? <AlertTriangle size={24} /> : <CheckCircle2 size={24} />)}
                 {t.confirmAction}
               </button>
             </div>

@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { Transaction, AppSettings } from '../types';
-import { LayoutGrid, Plus, Minus, TrendingUp, Gamepad2, Calendar, Clock, ChevronDown, ChevronUp } from 'lucide-react';
+import { LayoutGrid, Plus, Minus, TrendingUp, Gamepad2, Clock, AlertCircle, Layout } from 'lucide-react';
 
 interface TableManagerProps {
   transactions: Transaction[];
@@ -14,11 +14,11 @@ interface TableManagerProps {
 
 type Period = 'TODAY' | 'WEEKLY' | 'MONTHLY';
 
-const TableManager: React.FC<TableManagerProps> = ({ transactions, settings, setSettings, t, isRTL, isDark }) => {
+const TableManager: React.FC<TableManagerProps> = ({ transactions = [], settings, setSettings, t, isRTL, isDark }) => {
   const [selectedPeriod, setSelectedPeriod] = useState<Period>('TODAY');
 
   const addTable = () => {
-    setSettings(prev => ({ ...prev, tableCount: prev.tableCount + 1 }));
+    setSettings(prev => ({ ...prev, tableCount: (prev.tableCount || 0) + 1 }));
   };
 
   const removeTable = () => {
@@ -40,19 +40,27 @@ const TableManager: React.FC<TableManagerProps> = ({ transactions, settings, set
       startTime.setDate(now.getDate() - 30);
     }
 
-    const filteredTransactions = transactions.filter(tr => tr.timestamp >= startTime.getTime() && tr.isSettled);
+    const startTimeMs = startTime.getTime();
+    
+    // Safety check for transactions array
+    const safeTransactions = Array.isArray(transactions) ? transactions : [];
+    const filteredTransactions = safeTransactions.filter(tr => tr && tr.timestamp >= startTimeMs && tr.isSettled);
     
     const stats: Record<number, { games: number, revenue: number }> = {};
-    for (let i = 1; i <= settings.tableCount; i++) {
+    const tableCount = settings.tableCount || 1;
+    
+    for (let i = 1; i <= tableCount; i++) {
       stats[i] = { games: 0, revenue: 0 };
     }
 
     filteredTransactions.forEach(tr => {
-      if (tr.gameTables && tr.gameTables.length > 0) {
-        tr.gameTables.forEach((tableNum) => {
-          if (stats[tableNum]) {
-            stats[tableNum].games += 1;
-            stats[tableNum].revenue += tr.totalPaid / tr.gameTables.length;
+      const gameTables = Array.isArray(tr.gameTables) ? tr.gameTables : [];
+      if (gameTables.length > 0) {
+        gameTables.forEach((tableNum) => {
+          const num = Number(tableNum);
+          if (num > 0 && stats[num]) {
+            stats[num].games += 1;
+            stats[num].revenue += (tr.totalPaid || 0) / gameTables.length;
           }
         });
       }
@@ -61,20 +69,22 @@ const TableManager: React.FC<TableManagerProps> = ({ transactions, settings, set
     return stats;
   }, [transactions, selectedPeriod, settings.tableCount]);
 
-  const formatCurrency = (val: number) => val.toLocaleString() + " IQD";
+  const formatCurrency = (val: number) => Math.round(val).toLocaleString() + " IQD";
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500 pb-20">
-      {/* Management Control */}
+      {/* Management Control Panel */}
       <div className={`bg-slate-800 border border-slate-700 rounded-[2rem] p-8 shadow-2xl relative overflow-hidden ${isRTL ? 'text-right' : ''}`}>
-        <div className={`flex flex-col md:flex-row items-center justify-between gap-6 ${isRTL ? 'flex-row-reverse' : ''}`}>
+        <div className={`flex flex-col md:flex-row items-center justify-between gap-6 ${isRTL ? 'md:flex-row-reverse' : ''}`}>
            <div className={`flex items-center gap-4 ${isRTL ? 'flex-row-reverse' : ''}`}>
-              <div className="w-14 h-14 rounded-2xl bg-indigo-500/10 flex items-center justify-center text-indigo-400">
+              <div className="w-14 h-14 rounded-2xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 shadow-inner">
                 <LayoutGrid size={32} />
               </div>
               <div>
                  <h3 className="text-2xl font-black text-white">{t.tableMgmt}</h3>
-                 <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">{t.tables}: {settings.tableCount}</p>
+                 <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">
+                   {t.tables}: {settings.tableCount}
+                 </p>
               </div>
            </div>
 
@@ -125,7 +135,11 @@ const TableManager: React.FC<TableManagerProps> = ({ transactions, settings, set
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-           {Object.entries(tableStats).map(([num, data]) => {
+           {Object.entries(tableStats).length === 0 ? (
+             <div className="col-span-full py-12 text-center text-slate-500 italic">
+               No data available for statistics.
+             </div>
+           ) : Object.entries(tableStats).map(([num, data]) => {
              const stats = data as { games: number; revenue: number };
              return (
                <div key={num} className="bg-slate-800 border border-slate-700 rounded-[2rem] p-6 shadow-lg hover:border-slate-500 transition-all group overflow-hidden relative">
@@ -135,7 +149,7 @@ const TableManager: React.FC<TableManagerProps> = ({ transactions, settings, set
                      <div className="w-12 h-12 bg-slate-900 rounded-2xl flex items-center justify-center border border-slate-700 shadow-inner">
                         <span className="text-2xl font-black text-indigo-400">{num}</span>
                      </div>
-                     <div className="text-right">
+                     <div className={isRTL ? 'text-left' : 'text-right'}>
                         <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{t.table}</span>
                      </div>
                   </div>
@@ -154,7 +168,7 @@ const TableManager: React.FC<TableManagerProps> = ({ transactions, settings, set
                            <Clock size={14} />
                            <span className="text-[10px] font-bold uppercase">{t.revenue}</span>
                         </div>
-                        <span className="text-lg font-black text-emerald-400">{formatCurrency(Math.round(stats.revenue))}</span>
+                        <span className="text-lg font-black text-emerald-400">{formatCurrency(stats.revenue)}</span>
                      </div>
                   </div>
                   
@@ -168,6 +182,15 @@ const TableManager: React.FC<TableManagerProps> = ({ transactions, settings, set
              );
            })}
         </div>
+      </div>
+
+      <div className="p-6 bg-indigo-500/5 border border-indigo-500/10 rounded-[2rem] flex items-start gap-4">
+        <AlertCircle className="text-indigo-400 shrink-0" size={20} />
+        <p className="text-[11px] text-slate-400 leading-relaxed font-medium">
+          {isRTL 
+            ? 'لێرە دەتوانیت ژمارەی مێزەکانی هۆڵەکە زیاد یان کەم بکەیت. هەر گۆڕانکارییەک بکەیت کاریگەری دەبێت لەسەر بەشی یارییە چالاکەکان و داشبۆرد.'
+            : 'Here you can adjust the total number of tables in your hall. Any changes will immediately reflect in the session manager and performance dashboards.'}
+        </p>
       </div>
     </div>
   );

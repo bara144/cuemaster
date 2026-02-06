@@ -1,8 +1,7 @@
 
 import React from 'react';
 import { Notification, User, Role } from '../types';
-// ShieldInfo is not a valid export from lucide-react. Replacing with Info.
-import { Bell, MessageSquare, Clock, Info, Trash2 } from 'lucide-react';
+import { Bell, MessageSquare, Clock, Info, Trash2, CheckCircle2 } from 'lucide-react';
 
 interface NotificationsViewProps {
   notifications: Notification[];
@@ -10,11 +9,15 @@ interface NotificationsViewProps {
   t: any;
   isRTL: boolean;
   isDark: boolean;
+  onMarkRead?: (id: string) => void;
 }
 
-const NotificationsView: React.FC<NotificationsViewProps> = ({ notifications, currentUser, t, isRTL, isDark }) => {
+const NotificationsView: React.FC<NotificationsViewProps> = ({ notifications, currentUser, t, isRTL, isDark, onMarkRead }) => {
+  const isSuperAdmin = currentUser.role === Role.ADMIN && currentUser.username === 'admin';
+  const contextHallId = isSuperAdmin ? 'MAIN' : currentUser.hallId;
+
   const hallNotes = notifications
-    .filter(n => n.hallId === currentUser.hallId)
+    .filter(n => n.hallId === contextHallId)
     .sort((a, b) => b.timestamp - a.timestamp);
 
   const formatDate = (ts: number) => {
@@ -37,7 +40,9 @@ const NotificationsView: React.FC<NotificationsViewProps> = ({ notifications, cu
            </div>
            <div className={isRTL ? 'text-right' : ''}>
               <h3 className="text-2xl font-black text-white">{t.messages}</h3>
-              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">Official System Announcements</p>
+              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">
+                {isSuperAdmin ? (isRTL ? 'ئاگادارکردنەوەکانی بەڕێوبەر' : 'Super Admin Alerts') : 'Official System Announcements'}
+              </p>
            </div>
         </div>
       </div>
@@ -48,38 +53,53 @@ const NotificationsView: React.FC<NotificationsViewProps> = ({ notifications, cu
              <Bell size={48} className="mx-auto mb-4 opacity-10" />
              <p className="font-bold opacity-30">{t.noMessages}</p>
           </div>
-        ) : hallNotes.map((note) => (
-          <div 
-            key={note.id} 
-            className={`p-6 rounded-[2rem] border transition-all hover:border-indigo-500/50 shadow-lg ${isDark ? 'bg-slate-800/60 border-slate-700' : 'bg-white border-slate-200'}`}
-          >
-            <div className={`flex items-start gap-4 ${isRTL ? 'flex-row-reverse text-right' : ''}`}>
-               <div className="w-10 h-10 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 shrink-0">
-                  <Info size={20} />
-               </div>
-               <div className="flex-1 space-y-3">
-                  <div className={`flex justify-between items-center ${isRTL ? 'flex-row-reverse' : ''}`}>
-                     <span className="text-[10px] font-black text-indigo-500 uppercase tracking-widest">{t.systemMessageTitle}</span>
-                     <div className="flex items-center gap-1.5 text-slate-500">
-                        <Clock size={12} />
-                        <span className="text-[10px] font-bold">{formatDate(note.timestamp)}</span>
-                     </div>
-                  </div>
-                  <p className={`text-slate-200 text-lg leading-relaxed whitespace-pre-wrap font-medium ${isRTL ? 'text-right' : ''}`}>
-                    {note.text}
-                  </p>
-               </div>
+        ) : hallNotes.map((note) => {
+          const unread = !note.isRead;
+          return (
+            <div 
+              key={note.id} 
+              onClick={() => unread && onMarkRead?.(note.id)}
+              className={`p-6 rounded-[2rem] border transition-all cursor-pointer group shadow-lg ${
+                isDark 
+                ? (unread ? 'bg-indigo-500/5 border-indigo-500/40 ring-1 ring-indigo-500/20' : 'bg-slate-800/60 border-slate-700') 
+                : (unread ? 'bg-indigo-50 border-indigo-300' : 'bg-white border-slate-200')
+              }`}
+            >
+              <div className={`flex items-start gap-4 ${isRTL ? 'flex-row-reverse text-right' : ''}`}>
+                 <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${unread ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20' : 'bg-slate-500/10 text-slate-500'}`}>
+                    {unread ? <Bell size={20} className="animate-bounce" /> : <CheckCircle2 size={20} />}
+                 </div>
+                 <div className="flex-1 space-y-3">
+                    <div className={`flex justify-between items-center ${isRTL ? 'flex-row-reverse' : ''}`}>
+                       <span className={`text-[10px] font-black uppercase tracking-widest ${unread ? 'text-indigo-400' : 'text-slate-500'}`}>
+                         {isSuperAdmin ? (isRTL ? 'داواکاری یان پەیامی نوێ' : 'Incoming Event') : t.systemMessageTitle}
+                       </span>
+                       <div className="flex items-center gap-1.5 text-slate-500">
+                          <Clock size={12} />
+                          <span className="text-[10px] font-bold">{formatDate(note.timestamp)}</span>
+                       </div>
+                    </div>
+                    <p className={`text-lg leading-relaxed whitespace-pre-wrap font-medium ${isRTL ? 'text-right' : ''} ${unread ? 'text-white' : 'text-slate-400 italic'}`}>
+                      {note.text}
+                    </p>
+                    {unread && isSuperAdmin && (
+                      <div className={`flex items-center gap-1.5 text-[9px] font-black text-indigo-400 uppercase tracking-tighter transition-opacity group-hover:opacity-100 ${isRTL ? 'justify-start' : 'justify-end'}`}>
+                         {isRTL ? 'کرتە لێرە بکە بۆ نیشانەکردن وەک خوێندراوە' : 'Click to mark as seen'}
+                      </div>
+                    )}
+                 </div>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       
       <div className="p-4 bg-indigo-500/5 border border-indigo-500/10 rounded-2xl flex items-start gap-3">
          <Info className="text-indigo-400 shrink-0 mt-0.5" size={16} />
          <p className="text-[10px] text-slate-500 font-medium leading-relaxed italic">
            {isRTL 
-             ? 'تێبینی: تەنها بەڕێوبەری باڵا دەسەڵاتی ناردنی پەیامی هەیە. ئەم پەیامانە بۆ هەموو ستاف و بەڕێوەبەرانی ئەم هۆڵە دەردەکەون.'
-             : 'Note: Only the Super Administrator has permission to broadcast messages. These updates are visible to all staff and managers of this hall.'}
+             ? 'تێبینی: کاتێک کرتە لەسەر نامەیەکی نوێ دەکەیت، ژمارەی ئاگادارکردنەوەکان کەمدەکات وەک ئاماژەیەک بۆ ئەوەی کە نامەکە بینراوە.'
+             : 'Note: Clicking on an unread message will decrease the notification count, indicating it has been acknowledged.'}
          </p>
       </div>
     </div>

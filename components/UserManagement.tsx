@@ -1,7 +1,8 @@
 
 import React, { useState, useMemo } from 'react';
 import { User, Role } from '../types';
-import { UserPlus, Shield, Trash2, CheckCircle2, Lock, Trophy, RotateCw, ShieldOff, ToggleLeft, ToggleRight, XCircle, Key, X, Save, Building2 } from 'lucide-react';
+import { UserPlus, Shield, Trash2, CheckCircle2, Lock, Trophy, RotateCw, ShieldOff, ToggleLeft, ToggleRight, XCircle, Key, X, Save, Building2, Loader2, Store } from 'lucide-react';
+import { syncToCloud } from '../services/firebaseService';
 
 interface UserManagementProps {
   users: User[];
@@ -16,6 +17,8 @@ const UserManagement: React.FC<UserManagementProps> = ({ users, setUsers, t, cur
   const [newRole, setNewRole] = useState<Role>(Role.STAFF);
   const [allowTournament, setAllowTournament] = useState(false);
   const [allowWheel, setAllowWheel] = useState(false);
+  const [allowMarketplace, setAllowMarketplace] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   // States for Password Change
   const [editingPasswordUser, setEditingPasswordUser] = useState<User | null>(null);
@@ -24,13 +27,8 @@ const UserManagement: React.FC<UserManagementProps> = ({ users, setUsers, t, cur
   const isSuperAdmin = currentUser?.role === Role.ADMIN;
   const isManager = currentUser?.role === Role.MANAGER;
 
-  // --- Filtered Users List ---
-  // If Super Admin: Sees their own staff in the main list, can see others if they want
-  // If Hall Manager: see only STAFF members with the same hallId
   const visibleUsers = useMemo(() => {
     if (isSuperAdmin) {
-      // Prioritize showing staff of the admin's own hall, but allow seeing all if needed
-      // For simplicity in the "Users" tab, we show users belonging to the current context's hall
       return users.filter(u => u.hallId === currentUser?.hallId);
     }
     if (isManager) {
@@ -39,8 +37,17 @@ const UserManagement: React.FC<UserManagementProps> = ({ users, setUsers, t, cur
     return [];
   }, [users, isSuperAdmin, isManager, currentUser?.hallId]);
 
-  const addUser = () => {
+  const addUser = async () => {
     if (!newUsername || !newPassword) return;
+    
+    // Validate Hall ID
+    const targetHallId = currentUser?.hallId;
+    if (!targetHallId) {
+      alert(t.appName === "بیگ بۆس" ? "هەڵە: ناسنامەی هۆڵ (Hall ID) دەستنیشان نەکراوە!" : "Error: Hall ID is missing!");
+      return;
+    }
+
+    setIsSaving(true);
     
     const permissions = ['sessions', 'history', 'debts']; 
     if (newRole === Role.MANAGER || newRole === Role.ADMIN) {
@@ -48,6 +55,7 @@ const UserManagement: React.FC<UserManagementProps> = ({ users, setUsers, t, cur
     } else {
       if (allowTournament) permissions.push('tournament');
       if (allowWheel) permissions.push('wheel');
+      if (allowMarketplace) permissions.push('marketplace');
     }
 
     const newUser: User = {
@@ -56,25 +64,41 @@ const UserManagement: React.FC<UserManagementProps> = ({ users, setUsers, t, cur
       password: newPassword.trim(),
       role: newRole,
       permissions: permissions,
-      hallId: currentUser?.hallId || 'MAIN',
+      hallId: targetHallId,
       status: 'ACTIVE'
     };
 
-    setUsers([...users, newUser]);
-    setNewUsername('');
-    setNewPassword('');
-    setAllowTournament(false);
-    setAllowWheel(false);
-    setNewRole(Role.STAFF);
+    const updatedUsersList = [...users, newUser];
+
+    try {
+      // 1. Update Local State
+      setUsers(updatedUsersList);
+      
+      // 2. Direct Sync to Firebase
+      await syncToCloud('users', updatedUsersList);
+      
+      // Reset Form
+      setNewUsername('');
+      setNewPassword('');
+      setAllowTournament(false);
+      setAllowWheel(false);
+      setAllowMarketplace(false);
+      setNewRole(Role.STAFF);
+    } catch (error) {
+      console.error("Cloud Sync Failed:", error);
+      alert(t.appName === "بیگ بۆس" 
+        ? "کێشەیەک لە پەیوەندی ئینتەرنێت هەیە، دڵنیا بەرەوە داتاکان سەیڤ بوون!" 
+        : "Connection error: Please ensure data is saved to the cloud!");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const deleteUser = (id: string) => {
-    if (id === currentUser?.id) return; // Prevent self-delete
-    
+  const deleteUser = async (id: string) => {
+    if (id === currentUser?.id) return;
     const userToDelete = users.find(u => u.id === id);
     if (!userToDelete) return;
 
-    // Security: Managers can only delete Staff in their hall
     if (isManager && (userToDelete.role !== Role.STAFF || userToDelete.hallId !== currentUser?.hallId)) {
       return;
     }
@@ -83,24 +107,37 @@ const UserManagement: React.FC<UserManagementProps> = ({ users, setUsers, t, cur
         users.filter(u => u.role === Role.ADMIN || u.role === Role.MANAGER).length === 1) {
       return;
     }
-    setUsers(users.filter(u => u.id !== id));
+
+    const updatedList = users.filter(u => u.id !== id);
+    setUsers(updatedList);
+    try {
+      await syncToCloud('users', updatedList);
+    } catch (e) {
+      console.error("Delete sync failed", e);
+    }
   };
 
-  const updatePassword = () => {
+  const updatePassword = async () => {
     if (!editingPasswordUser || !tempNewPassword.trim()) return;
     
-    setUsers(prev => prev.map(user => 
+    const updatedList = users.map(user => 
       user.id === editingPasswordUser.id 
         ? { ...user, password: tempNewPassword.trim() } 
         : user
-    ));
+    );
     
-    setEditingPasswordUser(null);
-    setTempNewPassword('');
+    setUsers(updatedList);
+    try {
+      await syncToCloud('users', updatedList);
+      setEditingPasswordUser(null);
+      setTempNewPassword('');
+    } catch (e) {
+      alert("Error updating password in cloud.");
+    }
   };
 
-  const togglePermission = (userId: string, permission: string) => {
-    setUsers(prevUsers => prevUsers.map(user => {
+  const togglePermission = async (userId: string, permission: string) => {
+    const updatedList = users.map(user => {
       if (user.id === userId && user.role === Role.STAFF) {
         const hasPermission = user.permissions.includes(permission);
         const newPermissions = hasPermission
@@ -109,7 +146,14 @@ const UserManagement: React.FC<UserManagementProps> = ({ users, setUsers, t, cur
         return { ...user, permissions: newPermissions };
       }
       return user;
-    }));
+    });
+
+    setUsers(updatedList);
+    try {
+      await syncToCloud('users', updatedList);
+    } catch (e) {
+      console.error("Permission sync failed", e);
+    }
   };
 
   const isRTL = t.appName === "بیگ بۆس";
@@ -127,7 +171,7 @@ const UserManagement: React.FC<UserManagementProps> = ({ users, setUsers, t, cur
           <div className={isRTL ? 'text-right' : ''}>
              {isSuperAdmin ? (isRTL ? 'دروستکردنی ستافی ئەدمین' : 'Create Admin Staff') : t.createAccount}
              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-[0.3em] mt-1">
-               {isRTL ? `زیادکردنی ستاف بۆ هۆڵی: ${currentUser?.hallId}` : `Adding Staff to Hall: ${currentUser?.hallId}`}
+               {isRTL ? `زیادکردنی ستاف بۆ هۆڵی: ${currentUser?.hallId || '?'}` : `Adding Staff to Hall: ${currentUser?.hallId || '?'}`}
              </p>
           </div>
         </h3>
@@ -180,7 +224,7 @@ const UserManagement: React.FC<UserManagementProps> = ({ users, setUsers, t, cur
           </div>
 
           {newRole === Role.STAFF && (
-            <div className={`flex flex-col sm:flex-row gap-8 p-8 bg-slate-900/50 rounded-3xl border border-slate-700/50 shadow-inner ${isRTL ? 'flex-row-reverse' : ''}`}>
+            <div className={`flex flex-col sm:flex-row flex-wrap gap-8 p-8 bg-slate-900/50 rounded-3xl border border-slate-700/50 shadow-inner ${isRTL ? 'flex-row-reverse' : ''}`}>
                <label className={`flex items-center gap-5 cursor-pointer group select-none ${isRTL ? 'flex-row-reverse' : ''}`}>
                   <div className={`w-14 h-7 rounded-full transition-all relative flex items-center ${allowTournament ? 'bg-emerald-600 shadow-lg shadow-emerald-500/20' : 'bg-slate-700'}`}>
                     <div className={`w-5 h-5 bg-white rounded-full transition-all shadow-md flex items-center justify-center ${allowTournament ? (isRTL ? '-translate-x-8' : 'translate-x-8') : 'translate-x-1'}`}>
@@ -204,16 +248,28 @@ const UserManagement: React.FC<UserManagementProps> = ({ users, setUsers, t, cur
                     <RotateCw size={20} className={allowWheel ? 'text-indigo-400' : 'text-slate-600'} /> {t.allowWheel}
                   </span>
                </label>
+
+               <label className={`flex items-center gap-5 cursor-pointer group select-none ${isRTL ? 'flex-row-reverse' : ''}`}>
+                  <div className={`w-14 h-7 rounded-full transition-all relative flex items-center ${allowMarketplace ? 'bg-orange-600 shadow-lg shadow-orange-500/20' : 'bg-slate-700'}`}>
+                    <div className={`w-5 h-5 bg-white rounded-full transition-all shadow-md flex items-center justify-center ${allowMarketplace ? (isRTL ? '-translate-x-8' : 'translate-x-8') : 'translate-x-1'}`}>
+                       {!allowMarketplace && <Lock size={10} className="text-slate-500" />}
+                    </div>
+                  </div>
+                  <input type="checkbox" className="hidden" checked={allowMarketplace} onChange={(e) => setAllowMarketplace(e.target.checked)} />
+                  <span className="text-sm font-black text-slate-300 flex items-center gap-2">
+                    <Store size={20} className={allowMarketplace ? 'text-orange-400' : 'text-slate-600'} /> {isRTL ? 'ڕێگەدان بە بازاڕ' : 'Allow Marketplace'}
+                  </span>
+               </label>
             </div>
           )}
 
           <button 
             onClick={addUser}
-            disabled={!newUsername || !newPassword}
+            disabled={!newUsername || !newPassword || isSaving}
             className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-600 disabled:cursor-not-allowed py-5 rounded-[1.5rem] font-black text-lg transition-all shadow-xl active:scale-[0.98] flex items-center justify-center gap-3"
           >
-            <UserPlus size={24} />
-            {t.generateUser}
+            {isSaving ? <Loader2 className="animate-spin" size={24} /> : <UserPlus size={24} />}
+            {isSaving ? (isRTL ? "لە پڕۆسەی سەیڤکردندایە..." : "Saving...") : t.generateUser}
           </button>
         </div>
       </div>
@@ -225,6 +281,7 @@ const UserManagement: React.FC<UserManagementProps> = ({ users, setUsers, t, cur
           const isOwner = user.id === currentUser?.id;
           const hasTournament = user.permissions.includes('tournament') || user.permissions.includes('all');
           const hasWheel = user.permissions.includes('wheel') || user.permissions.includes('all');
+          const hasMarketplace = user.permissions.includes('marketplace') || user.permissions.includes('all');
 
           return (
             <div key={user.id} className={`bg-slate-800 border rounded-[3rem] p-8 group transition-all duration-500 hover:shadow-2xl hover:scale-[1.02] shadow-xl ${isUserPrivileged ? 'border-indigo-500/30' : 'border-slate-700/50 hover:border-slate-500'}`}>
@@ -281,8 +338,8 @@ const UserManagement: React.FC<UserManagementProps> = ({ users, setUsers, t, cur
                     </div>
                   </div>
                 ) : (
-                  <div className="space-y-4">
-                    <div className={`flex items-center justify-between p-4 bg-slate-900/40 rounded-[1.25rem] border border-slate-700/30 opacity-70 ${isRTL ? 'flex-row-reverse' : ''}`}>
+                  <div className="space-y-3">
+                    <div className={`flex items-center justify-between p-3.5 bg-slate-900/40 rounded-[1.25rem] border border-slate-700/30 opacity-70 ${isRTL ? 'flex-row-reverse' : ''}`}>
                       <div className={`flex items-center gap-3 ${isRTL ? 'flex-row-reverse' : ''}`}>
                         <div className="w-8 h-8 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-500">
                           <CheckCircle2 size={18} />
@@ -294,24 +351,24 @@ const UserManagement: React.FC<UserManagementProps> = ({ users, setUsers, t, cur
 
                     <button 
                       onClick={() => togglePermission(user.id, 'tournament')}
-                      className={`w-full flex items-center justify-between p-5 rounded-[1.25rem] border transition-all duration-300 active:scale-[0.97] group/btn ${
+                      className={`w-full flex items-center justify-between p-4 rounded-[1.25rem] border transition-all duration-300 active:scale-[0.97] group/btn ${
                         hasTournament 
                           ? 'bg-emerald-500/5 border-emerald-500/30 text-emerald-400' 
                           : 'bg-slate-900/60 border-slate-800 text-slate-600'
                       } ${isRTL ? 'flex-row-reverse' : ''}`}
                     >
                       <div className={`flex items-center gap-4 ${isRTL ? 'flex-row-reverse' : ''}`}>
-                        <div className={`w-10 h-10 rounded-2xl flex items-center justify-center transition-colors ${hasTournament ? 'bg-amber-500/10 text-amber-500' : 'bg-slate-800 text-slate-700'}`}>
-                          <Trophy size={20} />
+                        <div className={`w-9 h-9 rounded-2xl flex items-center justify-center transition-colors ${hasTournament ? 'bg-amber-500/10 text-amber-500' : 'bg-slate-800 text-slate-700'}`}>
+                          <Trophy size={18} />
                         </div>
-                        <span className="text-sm font-black tracking-tight">{t.tournament}</span>
+                        <span className="text-xs font-black tracking-tight">{t.tournament}</span>
                       </div>
                       <div className="flex items-center justify-center w-12 h-6">
                         {hasTournament ? (
-                          <ToggleRight size={28} className="text-emerald-500 transition-all group-hover/btn:scale-110" />
+                          <ToggleRight size={26} className="text-emerald-500 transition-all group-hover/btn:scale-110" />
                         ) : (
                           <div className="bg-slate-800/80 p-1.5 rounded-full border border-slate-700/50 shadow-inner">
-                             <Lock size={14} className="text-slate-500" />
+                             <Lock size={12} className="text-slate-500" />
                           </div>
                         )}
                       </div>
@@ -319,24 +376,49 @@ const UserManagement: React.FC<UserManagementProps> = ({ users, setUsers, t, cur
 
                     <button 
                       onClick={() => togglePermission(user.id, 'wheel')}
-                      className={`w-full flex items-center justify-between p-5 rounded-[1.25rem] border transition-all duration-300 active:scale-[0.97] group/btn ${
+                      className={`w-full flex items-center justify-between p-4 rounded-[1.25rem] border transition-all duration-300 active:scale-[0.97] group/btn ${
                         hasWheel 
                           ? 'bg-indigo-500/5 border-indigo-500/30 text-indigo-400' 
                           : 'bg-slate-900/60 border-slate-800 text-slate-600'
                       } ${isRTL ? 'flex-row-reverse' : ''}`}
                     >
                       <div className={`flex items-center gap-4 ${isRTL ? 'flex-row-reverse' : ''}`}>
-                        <div className={`w-10 h-10 rounded-2xl flex items-center justify-center transition-colors ${hasWheel ? 'bg-indigo-500/10 text-indigo-400' : 'bg-slate-800 text-slate-700'}`}>
-                          <RotateCw size={20} />
+                        <div className={`w-9 h-9 rounded-2xl flex items-center justify-center transition-colors ${hasWheel ? 'bg-indigo-500/10 text-indigo-400' : 'bg-slate-800 text-slate-700'}`}>
+                          <RotateCw size={18} />
                         </div>
-                        <span className="text-sm font-black tracking-tight">{t.wheel}</span>
+                        <span className="text-xs font-black tracking-tight">{t.wheel}</span>
                       </div>
                       <div className="flex items-center justify-center w-12 h-6">
                         {hasWheel ? (
-                          <ToggleRight size={28} className="text-indigo-500 transition-all group-hover/btn:scale-110" />
+                          <ToggleRight size={26} className="text-indigo-500 transition-all group-hover/btn:scale-110" />
                         ) : (
                           <div className="bg-slate-800/80 p-1.5 rounded-full border border-slate-700/50 shadow-inner">
-                             <Lock size={14} className="text-slate-500" />
+                             <Lock size={12} className="text-slate-500" />
+                          </div>
+                        )}
+                      </div>
+                    </button>
+
+                    <button 
+                      onClick={() => togglePermission(user.id, 'marketplace')}
+                      className={`w-full flex items-center justify-between p-4 rounded-[1.25rem] border transition-all duration-300 active:scale-[0.97] group/btn ${
+                        hasMarketplace 
+                          ? 'bg-orange-500/5 border-orange-500/30 text-orange-400' 
+                          : 'bg-slate-900/60 border-slate-800 text-slate-600'
+                      } ${isRTL ? 'flex-row-reverse' : ''}`}
+                    >
+                      <div className={`flex items-center gap-4 ${isRTL ? 'flex-row-reverse' : ''}`}>
+                        <div className={`w-9 h-9 rounded-2xl flex items-center justify-center transition-colors ${hasMarketplace ? 'bg-orange-500/10 text-orange-500' : 'bg-slate-800 text-slate-700'}`}>
+                          <Store size={18} />
+                        </div>
+                        <span className="text-xs font-black tracking-tight">{isRTL ? 'بازاڕی کاڵاکان' : 'Marketplace'}</span>
+                      </div>
+                      <div className="flex items-center justify-center w-12 h-6">
+                        {hasMarketplace ? (
+                          <ToggleRight size={26} className="text-emerald-500 transition-all group-hover/btn:scale-110" />
+                        ) : (
+                          <div className="bg-slate-800/80 p-1.5 rounded-full border border-slate-700/50 shadow-inner">
+                             <Lock size={12} className="text-slate-500" />
                           </div>
                         )}
                       </div>

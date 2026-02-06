@@ -193,16 +193,12 @@ const WheelOfFortune: React.FC<WheelOfFortuneProps> = ({ t, isRTL, isDark, setti
 
           <div className="space-y-3 overflow-y-auto max-h-[400px] pr-2 custom-scrollbar">
             {prizes.map((prize, idx) => {
-              const prob = settings.prizeWeights?.[prize] || 'NORMAL';
               return (
                 <div key={idx} className={`flex items-center justify-between p-4 rounded-2xl border group transition-all ${isDark ? 'bg-slate-900/50 border-slate-700' : 'bg-slate-50 border-slate-100'} ${isRTL ? 'flex-row-reverse' : ''}`}>
                   <div className={`flex items-center gap-3 ${isRTL ? 'flex-row-reverse' : ''}`}>
                     <div className="w-8 h-8 rounded-xl flex items-center justify-center text-[10px] font-black text-white shrink-0" style={{ backgroundColor: COLORS[idx % COLORS.length] }}>{idx + 1}</div>
                     <div className={isRTL ? 'text-right' : ''}>
                       <p className="font-black text-sm truncate max-w-[120px]">{prize}</p>
-                      <span className="text-[9px] font-black uppercase text-slate-500 tracking-tighter">
-                        {prob === 'NEVER' ? t.probNever : prob === 'RARE' ? t.probRare : prob === 'ENHANCED' ? t.probEnhanced : prob === 'FREQUENT' ? t.probFrequent : t.probNormal}
-                      </span>
                     </div>
                   </div>
                   <button onClick={() => removePrize(idx)} className="text-slate-600 hover:text-rose-500 p-2"><Trash2 size={16} /></button>

@@ -1,6 +1,6 @@
 
 import React, { useMemo, useState } from 'react';
-import { Transaction, PaymentMethod } from '../types';
+import { Transaction, PaymentMethod, User } from '../types';
 import { Search, UserCheck, AlertCircle, TrendingDown, Clock, X, Calculator, Banknote } from 'lucide-react';
 
 interface DebtManagerProps {
@@ -9,6 +9,7 @@ interface DebtManagerProps {
   isAdmin: boolean;
   t: any;
   isRTL: boolean;
+  currentUser: User;
 }
 
 interface DebtItem {
@@ -24,7 +25,7 @@ interface GroupedDebt {
   items: DebtItem[];
 }
 
-const DebtManager: React.FC<DebtManagerProps> = ({ transactions, setTransactions, isAdmin, t, isRTL }) => {
+const DebtManager: React.FC<DebtManagerProps> = ({ transactions, setTransactions, isAdmin, t, isRTL, currentUser }) => {
   const [filter, setFilter] = useState('');
   const [settleModalGroup, setSettleModalGroup] = useState<GroupedDebt | null>(null);
   const [settleType, setSettleType] = useState<'FULL' | 'PARTIAL'>('FULL');
@@ -75,7 +76,8 @@ const DebtManager: React.FC<DebtManagerProps> = ({ transactions, setTransactions
     let amountRemaining = settleType === 'FULL' ? settleModalGroup.totalAmount : partialAmount;
     if (amountRemaining <= 0) return;
 
-    // We process from oldest to newest debt to pay them off sequentially
+    const isActuallyPartialAction = settleType === 'PARTIAL';
+
     const playerDebtsSorted = transactions
       .filter(t => settleModalGroup.transactionIds.includes(t.id))
       .sort((a, b) => a.timestamp - b.timestamp);
@@ -92,18 +94,23 @@ const DebtManager: React.FC<DebtManagerProps> = ({ transactions, setTransactions
       if (debtIdx === -1) continue;
 
       if (amountRemaining >= debt.totalPaid) {
-        // Full settlement of this specific transaction
-        // Update timestamp to "now" so it counts in today's Daily Income
-        updatedTransactions[debtIdx] = { ...debt, isSettled: true, timestamp: now };
+        updatedTransactions[debtIdx] = { 
+          ...debt, 
+          isSettled: true, 
+          timestamp: now,
+          collectedBy: currentUser.id,
+          isPartialSettlement: isActuallyPartialAction
+        };
         amountRemaining -= debt.totalPaid;
       } else {
-        // Partial settlement of this specific transaction - Split it
         const paidPart: Transaction = {
           ...debt,
           id: Math.random().toString(36).substr(2, 9),
           totalPaid: amountRemaining,
           isSettled: true,
-          timestamp: now
+          timestamp: now,
+          collectedBy: currentUser.id,
+          isPartialSettlement: true 
         };
         
         updatedTransactions[debtIdx] = { 
