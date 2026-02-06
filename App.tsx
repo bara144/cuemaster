@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { User, Role, Session, Transaction, AppSettings, Theme, AttendanceRecord, UsageSession, Notification } from './types';
 import { INITIAL_ADMIN, DEFAULT_SETTINGS } from './constants';
@@ -19,11 +20,10 @@ import SuperAdminPanel from './components/SuperAdminPanel';
 import NotificationsView from './components/NotificationsView';
 import HallStatsViewer from './components/HallStatsViewer';
 import MarketManagement from './components/MarketManagement';
+import TableTimelineView from './components/TableTimelineView';
 import Marketplace from './components/Marketplace';
 import AttendanceManager from './components/AttendanceManager';
 import { syncToCloud, subscribeToCloudData, db } from './services/firebaseService';
-
-// تێبینی: بەشی TableTimelineView لادرا چونکە فایلەکە بوونی نەبوو و دەبووە هۆی ئێرۆر
 
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -59,7 +59,9 @@ const App: React.FC = () => {
     return () => clearInterval(timer);
   }, []);
 
+  // Auth Helpers
   const isAdmin = currentUser?.role === Role.ADMIN || currentUser?.role === Role.MANAGER;
+  const isManager = currentUser?.role === Role.MANAGER;
   const isSuperAdmin = currentUser?.role === Role.ADMIN && currentUser?.username.toLowerCase() === 'admin';
   
   const hasPermission = (perm: string) => 
@@ -204,7 +206,7 @@ const App: React.FC = () => {
         setter((prev: any) => {
           if (JSON.stringify(newData) === JSON.stringify(prev)) return prev;
           isIncomingFromCloud.current[key] = true;
-          localStorage.setItem(`cuemaster_${key}_hid`, JSON.stringify(newData));
+          localStorage.setItem(`cuemaster_${key}_${hid}`, JSON.stringify(newData));
           return newData;
         });
       }, hid);
@@ -296,6 +298,7 @@ const App: React.FC = () => {
       case 'debts': return <DebtManager transactions={transactions} setTransactions={setTransactions} isAdmin={isAdmin} t={t} isRTL={isRTL} currentUser={currentUser!} />;
       case 'marketplace': return hasPermission('marketplace') ? <Marketplace currentUser={currentUser!} t={t} isRTL={isRTL} isDark={isDark} sendNotification={handleGlobalNotify} /> : <RestrictedAccess t={t} />;
       case 'market': return isAdmin ? <MarketManagement settings={settings} setSettings={setSettings} t={t} isRTL={isRTL} isDark={isDark} /> : <RestrictedAccess t={t} />;
+      case 'table-audit': return isAdmin ? <TableTimelineView transactions={transactions} settings={settings} setSettings={setSettings} t={t} isRTL={isRTL} isDark={isDark} onDeleteTransactions={(ids) => setTransactions(prev => prev.filter(tr => !ids.includes(tr.id)))} /> : <RestrictedAccess t={t} />;
       case 'table-mgmt': return isAdmin ? <TableManager transactions={transactions} settings={settings} setSettings={setSettings} t={t} isRTL={isRTL} isDark={isDark} /> : <RestrictedAccess t={t} />;
       case 'players': return isAdmin ? <PlayerManagement players={players} setPlayers={setPlayers} setTransactions={setTransactions} setSessions={setSessions} t={t} isRTL={isRTL} hallId={currentUser?.hallId} /> : <RestrictedAccess t={t} />;
       case 'users': return isAdmin ? <UserManagement users={users} setUsers={setUsers} t={t} currentUser={currentUser!} /> : <RestrictedAccess t={t} />;
@@ -305,11 +308,11 @@ const App: React.FC = () => {
       case 'matches': return <MatchHistory transactions={transactions} t={t} isRTL={isRTL} isDark={isDark} isAdmin={isAdmin} />;
       case 'hall-mgmt': 
         if (isSuperAdmin) return <SuperAdminPanel users={users} setUsers={setUsers} t={t} isRTL={isRTL} isDark={isDark} notifications={notifications} setNotifications={setNotifications} onViewHall={(hid) => { setViewingHallId(hid); setActiveTab('hall-details'); }} />;
+        // Removed manager access to hall-mgmt as requested
         return <RestrictedAccess t={t} />;
       case 'hall-details': return isSuperAdmin && viewingHallId ? <HallStatsViewer hallId={viewingHallId} users={users} t={t} isRTL={isRTL} onBack={() => setActiveTab('hall-mgmt')} /> : <RestrictedAccess t={t} />;
       case 'messages': return <NotificationsView notifications={notifications} currentUser={currentUser!} t={t} isRTL={isRTL} isDark={isDark} onMarkRead={handleMarkAsRead} />;
       case 'attendance': return <AttendanceManager attendanceRecords={attendanceRecords} setAttendanceRecords={setAttendanceRecords} currentUser={currentUser!} t={t} isRTL={isRTL} isDark={isDark} isAdmin={isAdmin} />;
-      case 'timeline': return <div className="p-8 text-center text-slate-400">Timeline View Coming Soon</div>;
       default: return null;
     }
   };
@@ -360,6 +363,7 @@ const App: React.FC = () => {
             <>
               <NavItem active={activeTab === 'market'} onClick={() => setActiveTab('market')} icon={<ShoppingBasket size={20} />} label={t.market} isRTL={isRTL} isDark={isDark} collapsed={!isSidebarOpen} />
               <NavItem active={activeTab === 'table-mgmt'} onClick={() => setActiveTab('table-mgmt')} icon={<LayoutGrid size={20} />} label={t.tableMgmt} isRTL={isRTL} isDark={isDark} collapsed={!isSidebarOpen} />
+              <NavItem active={activeTab === 'table-audit'} onClick={() => setActiveTab('table-audit')} icon={<Eye size={20} />} label={t.tableAudit} isRTL={isRTL} isDark={isDark} collapsed={!isSidebarOpen} />
               <NavItem active={activeTab === 'players'} onClick={() => setActiveTab('players')} icon={<Users2 size={20} />} label={t.managePlayers} isRTL={isRTL} isDark={isDark} collapsed={!isSidebarOpen} />
               <NavItem active={activeTab === 'users'} onClick={() => setActiveTab('users')} icon={<Users size={20} />} label={t.users} isRTL={isRTL} isDark={isDark} collapsed={!isSidebarOpen} />
               <NavItem active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} icon={<Settings size={20} />} label={t.settings} isRTL={isRTL} isDark={isDark} collapsed={!isSidebarOpen} />
