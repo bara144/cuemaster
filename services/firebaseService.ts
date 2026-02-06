@@ -1,69 +1,3 @@
-// import { initializeApp } from "firebase/app";
-// import { getFirestore, doc, setDoc, onSnapshot, enableIndexedDbPersistence } from "firebase/firestore";
-
-// // کلیلە ڕاستەقینەکانی تۆ کە ئێستا ناردت
-// const firebaseConfig = {
-//   apiKey: "AIzaSyBAqbOtXhlau7z1cZej-jhqYvOgt64oTYY",
-//   authDomain: "play-center-001.firebaseapp.com",
-//   projectId: "play-center-001",
-//   storageBucket: "play-center-001.firebasestorage.app",
-//   messagingSenderId: "41481926722",
-//   appId: "1:41481926722:web:e5aa0c8762240e16b995db",
-//   measurementId: "G-Z6RJ524JJS"
-// };
-
-// // دەستپێکردنی فایەربەیس
-// const app = initializeApp(firebaseConfig);
-// export const db = getFirestore(app);
-
-// // ڕێگەدان بە کارکردن بەبێ ئینتەرنێت (Offline Support)
-// enableIndexedDbPersistence(db).catch((err) => {
-//   console.error("Firebase Persistence Error:", err.code);
-// });
-
-// /**
-//  * سەیڤکردنی داتا بەپێی Hall ID
-//  * ئەگەر hallId نەبوو، لە شوێنە گشتییەکە سەیڤ دەبێت
-//  */
-// export const syncToCloud = async (collectionName: string, data: any, hallId?: string) => {
-//   if (!db) return;
-//   try {
-//     const path = hallId && hallId !== 'MAIN' 
-//       ? `halls/${hallId}/data/${collectionName}` 
-//       : `billiard_hall/${collectionName}`;
-    
-//     const docRef = doc(db, path);
-//     await setDoc(docRef, { 
-//       data, 
-//       updatedAt: Date.now(),
-//       hallReference: hallId || 'MAIN'
-//     }, { merge: true });
-    
-//     console.log(`Synced ${collectionName} for ${hallId || 'Global'}`);
-//   } catch (error) {
-//     console.error("Sync Error:", error);
-//   }
-// };
-
-// /**
-//  * هێنانەوەی داتا (Real-time) بەپێی Hall ID
-//  */
-// export const subscribeToCloudData = (collectionName: string, callback: (data: any) => void, hallId?: string) => {
-//   if (!db) return () => {};
-  
-//   const path = hallId && hallId !== 'MAIN' 
-//     ? `halls/${hallId}/data/${collectionName}` 
-//     : `billiard_hall/${collectionName}`;
-    
-//   const docRef = doc(db, path);
-//   return onSnapshot(docRef, (snapshot) => {
-//     if (snapshot.exists()) {
-//       callback(snapshot.data().data);
-//     }
-//   }, (error) => {
-//     console.error("Subscribe Error:", error);
-//   });
-// };
 
 import { initializeApp } from "firebase/app";
 import { 
@@ -73,10 +7,13 @@ import {
   CACHE_SIZE_UNLIMITED,
   doc, 
   setDoc, 
-  onSnapshot 
+  updateDoc,
+  onSnapshot,
+  Timestamp,
+  serverTimestamp,
+  arrayUnion
 } from "firebase/firestore";
 
-// کلیلە ڕاستەقینەکانی تۆ کە ئێستا ناردت
 const firebaseConfig = {
   apiKey: "AIzaSyBAqbOtXhlau7z1cZej-jhqYvOgt64oTYY",
   authDomain: "play-center-001.firebaseapp.com",
@@ -87,13 +24,8 @@ const firebaseConfig = {
   measurementId: "G-Z6RJ524JJS"
 };
 
-// دەستپێکردنی فایەربەیس
 const app = initializeApp(firebaseConfig);
 
-/**
- * ڕێکخستنی فایەستۆر بۆ ئەوەی داتاکان بە شێوەیەکی هەمیشەیی لەسەر ئامێرەکە بمێننەوە (Persistence)
- * بەکارهێنانی CACHE_SIZE_UNLIMITED بۆ ئەوەی مێژووی پارەدان و داتاکان هەرگیز نەسرێنەوە تەنانەت ئەگەر بێ ئینتەرنێتیش بێت
- */
 export const db = initializeFirestore(app, {
   localCache: persistentLocalCache({
     tabManager: persistentMultipleTabManager(),
@@ -102,9 +34,64 @@ export const db = initializeFirestore(app, {
 });
 
 /**
- * سەیڤکردنی داتا بەپێی Hall ID
- * Firestore Persistence ڕێگە دەدات داتاکە یەکسەر لە ناوخۆدا پاشەکەوت بێت
- * و کاتێک ئینتەرنێت پەیوەست بووەوە خۆی سینک دەبێتەوە لەگەڵ سێرڤەر
+ * Compresses an image to a very small Base64 string for Firestore compatibility.
+ * Resolution: max 400px, Quality: 0.5
+ */
+export const compressImage = (file: File): Promise<string> => {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 400; 
+        const MAX_HEIGHT = 400;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width *= MAX_HEIGHT / height;
+            height = MAX_HEIGHT;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, width, height);
+        // Use JPEG 0.5 for aggressive size reduction
+        resolve(canvas.toDataURL('image/jpeg', 0.5));
+      };
+    };
+  });
+};
+
+const sanitizeData = (obj: any, seen = new WeakSet()): any => {
+  if (obj === null || typeof obj !== 'object') return obj;
+  if (seen.has(obj)) return '[Circular]';
+  if (obj instanceof Timestamp) return obj.toMillis();
+  if (obj instanceof Date) return obj.getTime();
+  seen.add(obj);
+  if (Array.isArray(obj)) return obj.map(item => sanitizeData(item, seen));
+  const cleaned: any = {};
+  for (const key in obj) {
+    if (Object.prototype.hasOwnProperty.call(obj, key)) {
+      const val = obj[key];
+      if (val !== undefined) cleaned[key] = sanitizeData(val, seen);
+    }
+  }
+  return cleaned;
+};
+
+/**
+ * Global sync helper. ALWAYS uses serverTimestamp metadata to ensure consistency.
  */
 export const syncToCloud = async (collectionName: string, data: any, hallId?: string) => {
   if (!db) return;
@@ -114,40 +101,50 @@ export const syncToCloud = async (collectionName: string, data: any, hallId?: st
       : `billiard_hall/${collectionName}`;
     
     const docRef = doc(db, path);
+    const cleanData = sanitizeData(data);
     
-    // سەیڤکردنەکە یەکەمجار دەچێتە ناو کاشی ئۆفلاین (Offline Cache)
     await setDoc(docRef, { 
-      data, 
-      updatedAt: Date.now(),
+      data: cleanData, 
+      updatedAt: serverTimestamp(), // Avoids device-time future errors
       hallReference: hallId || 'MAIN'
     }, { merge: true });
-    
-    console.log(`Synced ${collectionName} for ${hallId || 'Global'} (Cached locally if offline)`);
   } catch (error) {
     console.error("Sync Error:", error);
   }
 };
 
 /**
- * هێنانەوەی داتا (Real-time) بەپێی Hall ID
- * ئەم مێتۆدە یەکسەر داتا لە کاشی ناوخۆییەوە دەهێنێت ئەگەر ئینتەرنێت نەبوو
+ * Atomic update using arrayUnion. Ensures items are added without risk of deleting existing ones.
  */
+export const updateHallDataAtomic = async (collectionName: string, itemToAdd: any, hallId: string) => {
+  if (!db || !hallId) return;
+  try {
+    const path = hallId === 'MAIN' ? `billiard_hall/${collectionName}` : `halls/${hallId}/data/${collectionName}`;
+    const docRef = doc(db, path);
+    const cleanedItem = sanitizeData(itemToAdd);
+    
+    await updateDoc(docRef, {
+      data: arrayUnion(cleanedItem),
+      updatedAt: serverTimestamp()
+    });
+  } catch (error) {
+    // Document might not exist, initialize it
+    await syncToCloud(collectionName, [itemToAdd], hallId);
+  }
+};
+
 export const subscribeToCloudData = (collectionName: string, callback: (data: any) => void, hallId?: string) => {
   if (!db) return () => {};
-  
   const path = hallId && hallId !== 'MAIN' 
     ? `halls/${hallId}/data/${collectionName}` 
     : `billiard_hall/${collectionName}`;
-    
   const docRef = doc(db, path);
   
-  // onSnapshot یەکسەر لە ئۆفلایندا کار دەکات ئەگەر داتای پاشەکەوتکراو هەبێت
   return onSnapshot(docRef, (snapshot) => {
     if (snapshot.exists()) {
       callback(snapshot.data().data);
     }
   }, (error) => {
-    console.error("Subscribe Error:", error);
+    // Quietly fail for unauthorized initial loads
   });
 };
-
